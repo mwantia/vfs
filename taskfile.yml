@@ -1,0 +1,87 @@
+version: '3'
+
+
+tasks:
+    default:
+        desc: List all available tasks
+        cmds:
+        - task --list
+        silent: true
+
+    init:
+        desc: Download and tidy Go module dependencies
+        cmds:
+        - go mod download
+        - go mod tidy
+
+    build:
+        desc: Build the golang library
+        cmds:
+        - task: init
+        - go build ./...
+
+    build-race:
+        desc: Build with race detection
+        cmds:
+        - task: init
+        - go build -race ./...
+
+    test:
+        desc: Run all tests
+        cmds:
+        - go test ./...
+
+    test-verbose:
+        desc: Run all tests with verbose output
+        cmds:
+        - go test -v ./...
+
+    test-race:
+        desc: Run tests with race detection
+        cmds:
+        - go test -race ./...
+
+    test-container:
+        desc: Run tests in container package only
+        cmds:
+        - go test ./container
+
+    test-coverage:
+        desc: Run tests with coverage report
+        cmds:
+        - go test -cover ./...
+
+    test-coverage-html:
+        desc: Generate HTML coverage report
+        cmds:
+        - go test -coverprofile=coverage.out ./...
+        - go tool cover -html=coverage.out -o coverage.html
+        - echo "Coverage report generated at coverage.html"
+
+    fmt:
+        desc: Format Go code
+        cmds:
+        - go fmt ./...
+
+    vet:
+        desc: Run go vet
+        cmds:
+        - go vet ./...
+
+    lint:
+        desc: Format code and run vet
+        cmds:
+        - task: fmt
+        - task: vet
+
+    clean:
+        desc: Clean build artifacts and coverage files
+        cmds:
+        - rm -f coverage.out coverage.html
+
+    ci:
+        desc: Run all CI checks (lint, test, build)
+        cmds:
+        - task: lint
+        - task: test-race
+        - task: build

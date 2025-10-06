@@ -9,6 +9,7 @@
 *.dylib
 
 # Test binary, built with `go test -c`
+test/
 *.test
 
 # Code coverage profiles and other test artifacts
@@ -18,7 +19,8 @@ coverage.*
 profile.cov
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+build/
+vendor/
 
 # Go workspace file
 go.work
@@ -28,5 +30,10 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.code-workspace
+.idea/
+.vscode/
+
+# CLAUDE specific files and proposals/docs
+CLAUDE.md
+.claude/
