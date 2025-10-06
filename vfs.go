@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -146,7 +147,12 @@ func (v *VirtualFileSystem) Stat(ctx context.Context, path string) (*VirtualFile
 		return nil, err
 	}
 
-	return mount.Stat(ctx, relPath)
+	objInfo, err := mount.Stat(ctx, relPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return objectInfoToFileInfo(objInfo), nil
 }
 
 // ReadDir lists directory contents for the given path.
@@ -156,7 +162,23 @@ func (v *VirtualFileSystem) ReadDir(ctx context.Context, path string) ([]*Virtua
 		return nil, err
 	}
 
-	return mount.ReadDir(ctx, relPath)
+	objInfos, err := mount.List(ctx, relPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if it's a directory
+	if len(objInfos) == 1 && objInfos[0].Type != ObjectTypeDirectory {
+		return nil, ErrNotDirectory
+	}
+
+	// Convert to FileInfo
+	fileInfos := make([]*VirtualFileInfo, len(objInfos))
+	for i, objInfo := range objInfos {
+		fileInfos[i] = objectInfoToFileInfo(objInfo)
+	}
+
+	return fileInfos, nil
 }
 
 // Open opens a file for reading.
@@ -166,7 +188,25 @@ func (v *VirtualFileSystem) Open(ctx context.Context, path string) (io.ReadClose
 		return nil, err
 	}
 
-	return mount.Open(ctx, relPath)
+	obj, err := mount.Get(ctx, relPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if obj.Info.Type == ObjectTypeDirectory {
+		return nil, ErrIsDirectory
+	}
+
+	if obj.Data == nil {
+		return io.NopCloser(bytes.NewReader([]byte{})), nil
+	}
+
+	// Wrap reader in NopCloser if it's not already a ReadCloser
+	if rc, ok := obj.Data.(io.ReadCloser); ok {
+		return rc, nil
+	}
+
+	return io.NopCloser(obj.Data), nil
 }
 
 // Create creates a new file for writing.
@@ -176,7 +216,13 @@ func (v *VirtualFileSystem) Create(ctx context.Context, path string) (io.WriteCl
 		return nil, err
 	}
 
-	return mount.Create(ctx, relPath)
+	// Return a writer that will create the file when closed
+	return &fileWriter{
+		mount: mount,
+		path:  relPath,
+		ctx:   ctx,
+		buf:   new(bytes.Buffer),
+	}, nil
 }
 
 // Remove deletes a file.
@@ -186,7 +232,26 @@ func (v *VirtualFileSystem) Remove(ctx context.Context, path string) error {
 		return err
 	}
 
-	return mount.Remove(ctx, relPath)
+	// Check if it's a file
+	objInfo, err := mount.Stat(ctx, relPath)
+	if err != nil {
+		return err
+	}
+
+	if objInfo.Type == ObjectTypeDirectory {
+		return ErrIsDirectory
+	}
+
+	deleted, err := mount.Delete(ctx, relPath, false)
+	if err != nil {
+		return err
+	}
+
+	if !deleted {
+		return ErrNotExist
+	}
+
+	return nil
 }
 
 // Mkdir creates a directory.
@@ -196,7 +261,17 @@ func (v *VirtualFileSystem) Mkdir(ctx context.Context, path string) error {
 		return err
 	}
 
-	return mount.Mkdir(ctx, relPath)
+	obj := &VirtualObject{
+		Info: VirtualObjectInfo{
+			Path:    relPath,
+			Type:    ObjectTypeDirectory,
+			Mode:    ModeDir | 0755,
+			ModTime: time.Now(),
+		},
+		Data: nil,
+	}
+
+	return mount.Create(ctx, relPath, obj)
 }
 
 // RemoveAll removes a directory and all its contents.
@@ -206,5 +281,74 @@ func (v *VirtualFileSystem) RemoveAll(ctx context.Context, path string) error {
 		return err
 	}
 
-	return mount.RemoveAll(ctx, relPath)
+	deleted, err := mount.Delete(ctx, relPath, true)
+	if err != nil {
+		return err
+	}
+
+	if !deleted {
+		return ErrNotExist
+	}
+
+	return nil
+}
+
+// fileWriter implements io.WriteCloser for VFS files.
+type fileWriter struct {
+	mount  VirtualMount
+	path   string
+	ctx    context.Context
+	buf    *bytes.Buffer
+	closed bool
+}
+
+func (fw *fileWriter) Write(p []byte) (n int, err error) {
+	if fw.closed {
+		return 0, ErrClosed
+	}
+	return fw.buf.Write(p)
+}
+
+func (fw *fileWriter) Close() error {
+	if fw.closed {
+		return ErrClosed
+	}
+	fw.closed = true
+
+	// Create the object
+	obj := &VirtualObject{
+		Info: VirtualObjectInfo{
+			Path:    fw.path,
+			Type:    ObjectTypeFile,
+			Size:    int64(fw.buf.Len()),
+			Mode:    0644,
+			ModTime: time.Now(),
+		},
+		Data: bytes.NewReader(fw.buf.Bytes()),
+	}
+
+	// Check if file exists
+	_, err := fw.mount.Stat(fw.ctx, fw.path)
+	exists := err == nil
+
+	if exists {
+		// Update existing file
+		_, err = fw.mount.Update(fw.ctx, fw.path, obj)
+		return err
+	}
+
+	// Create new file
+	return fw.mount.Create(fw.ctx, fw.path, obj)
+}
+
+// objectInfoToFileInfo converts VirtualObjectInfo to VirtualFileInfo.
+func objectInfoToFileInfo(objInfo *VirtualObjectInfo) *VirtualFileInfo {
+	return &VirtualFileInfo{
+		Name:    objInfo.Name,
+		Path:    objInfo.Path,
+		Size:    objInfo.Size,
+		Mode:    objInfo.Mode,
+		IsDir:   objInfo.Type == ObjectTypeDirectory,
+		ModTime: objInfo.ModTime,
+	}
 }

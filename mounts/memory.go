@@ -19,10 +19,11 @@ type MemoryMount struct {
 }
 
 type MemoryFile struct {
-	data    []byte
-	size    int64
-	isDir   bool
-	modTime time.Time
+	data     []byte
+	size     int64
+	isDir    bool
+	modTime  time.Time
+	metadata map[string]string
 }
 
 func NewMemory() *MemoryMount {
@@ -30,16 +31,26 @@ func NewMemory() *MemoryMount {
 		files: make(map[string]*MemoryFile),
 	}
 	memory.files[""] = &MemoryFile{
-		data:    make([]byte, 0),
-		size:    0,
-		isDir:   true,
-		modTime: time.Now(),
+		data:     make([]byte, 0),
+		size:     0,
+		isDir:    true,
+		modTime:  time.Now(),
+		metadata: make(map[string]string),
 	}
 
 	return memory
 }
 
-func (m *MemoryMount) Stat(ctx context.Context, p string) (*vfs.VirtualFileInfo, error) {
+func (m *MemoryMount) GetCapabilities() vfs.VirtualMountCapabilities {
+	return vfs.VirtualMountCapabilities{
+		Capabilities: []vfs.VirtualMountCapability{
+			vfs.VirtualMountCapabilityCRUD,
+			vfs.VirtualMountCapabilityMetadata,
+		},
+	}
+}
+
+func (m *MemoryMount) Stat(ctx context.Context, p string) (*vfs.VirtualObjectInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -48,22 +59,28 @@ func (m *MemoryMount) Stat(ctx context.Context, p string) (*vfs.VirtualFileInfo,
 		return nil, vfs.ErrNotExist
 	}
 
+	objType := vfs.ObjectTypeFile
+	if file.isDir {
+		objType = vfs.ObjectTypeDirectory
+	}
+
 	mode := vfs.VirtualFileMode(0644)
 	if file.isDir {
 		mode = vfs.ModeDir | 0755
 	}
 
-	return &vfs.VirtualFileInfo{
-		Name:    path.Base(p),
-		Path:    p,
-		Size:    file.size,
-		Mode:    mode,
-		IsDir:   file.isDir,
-		ModTime: file.modTime,
+	return &vfs.VirtualObjectInfo{
+		Path:     p,
+		Name:     path.Base(p),
+		Type:     objType,
+		Size:     file.size,
+		Mode:     mode,
+		ModTime:  file.modTime,
+		Metadata: copyMetadata(file.metadata),
 	}, nil
 }
 
-func (m *MemoryMount) ReadDir(ctx context.Context, p string) ([]*vfs.VirtualFileInfo, error) {
+func (m *MemoryMount) List(ctx context.Context, p string) ([]*vfs.VirtualObjectInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -72,11 +89,24 @@ func (m *MemoryMount) ReadDir(ctx context.Context, p string) ([]*vfs.VirtualFile
 		return nil, vfs.ErrNotExist
 	}
 
+	// For files, return single entry
 	if !dir.isDir {
-		return nil, vfs.ErrNotDirectory
+		mode := vfs.VirtualFileMode(0644)
+		return []*vfs.VirtualObjectInfo{
+			{
+				Path:     p,
+				Name:     path.Base(p),
+				Type:     vfs.ObjectTypeFile,
+				Size:     dir.size,
+				Mode:     mode,
+				ModTime:  dir.modTime,
+				Metadata: copyMetadata(dir.metadata),
+			},
+		}, nil
 	}
 
-	var files []*vfs.VirtualFileInfo
+	// For directories, return children
+	var objects []*vfs.VirtualObjectInfo
 	prefix := p
 	if prefix != "" {
 		prefix += "/"
@@ -93,7 +123,6 @@ func (m *MemoryMount) ReadDir(ctx context.Context, p string) ([]*vfs.VirtualFile
 		}
 
 		rel := strings.TrimPrefix(filePath, prefix)
-
 		parts := strings.Split(rel, "/")
 		if len(parts) == 0 {
 			continue
@@ -111,28 +140,31 @@ func (m *MemoryMount) ReadDir(ctx context.Context, p string) ([]*vfs.VirtualFile
 			isChildDir = true
 		}
 
+		objType := vfs.ObjectTypeFile
 		mode := vfs.VirtualFileMode(0644)
 		size := file.size
 
 		if isChildDir {
+			objType = vfs.ObjectTypeDirectory
 			mode = vfs.ModeDir | 0755
 			size = 0
 		}
 
-		files = append(files, &vfs.VirtualFileInfo{
-			Name:    childName,
-			Path:    childPath,
-			Size:    size,
-			Mode:    mode,
-			IsDir:   isChildDir,
-			ModTime: file.modTime,
+		objects = append(objects, &vfs.VirtualObjectInfo{
+			Path:     childPath,
+			Name:     childName,
+			Type:     objType,
+			Size:     size,
+			Mode:     mode,
+			ModTime:  file.modTime,
+			Metadata: copyMetadata(file.metadata),
 		})
 	}
 
-	return files, nil
+	return objects, nil
 }
 
-func (m *MemoryMount) Open(ctx context.Context, p string) (io.ReadCloser, error) {
+func (m *MemoryMount) Get(ctx context.Context, p string) (*vfs.VirtualObject, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -141,97 +173,218 @@ func (m *MemoryMount) Open(ctx context.Context, p string) (io.ReadCloser, error)
 		return nil, vfs.ErrNotExist
 	}
 
+	objType := vfs.ObjectTypeFile
 	if file.isDir {
-		return nil, vfs.ErrIsDirectory
+		objType = vfs.ObjectTypeDirectory
 	}
 
+	mode := vfs.VirtualFileMode(0644)
+	if file.isDir {
+		mode = vfs.ModeDir | 0755
+	}
+
+	info := vfs.VirtualObjectInfo{
+		Path:     p,
+		Name:     path.Base(p),
+		Type:     objType,
+		Size:     file.size,
+		Mode:     mode,
+		ModTime:  file.modTime,
+		Metadata: copyMetadata(file.metadata),
+	}
+
+	// For directories, no data reader
+	if file.isDir {
+		return &vfs.VirtualObject{
+			Info: info,
+			Data: nil,
+		}, nil
+	}
+
+	// For files, copy data to reader
 	data := make([]byte, len(file.data))
 	copy(data, file.data)
 
-	return io.NopCloser(bytes.NewReader(data)), nil
-}
-
-func (m *MemoryMount) Create(ctx context.Context, p string) (io.WriteCloser, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if file, exists := m.files[p]; exists && file.isDir {
-		return nil, vfs.ErrIsDirectory
-	}
-
-	if err := m.mkdirAllLocked(path.Dir(p)); err != nil {
-		return nil, err
-	}
-
-	// Create or truncate file
-	m.files[p] = &MemoryFile{
-		data:    nil,
-		isDir:   false,
-		modTime: time.Now(),
-	}
-
-	return &MemoryFileWriter{
-		memory: m,
-		path:   p,
-		buf:    new(bytes.Buffer),
+	return &vfs.VirtualObject{
+		Info: info,
+		Data: bytes.NewReader(data),
 	}, nil
 }
 
-func (m *MemoryMount) Remove(ctx context.Context, p string) error {
+func (m *MemoryMount) Create(ctx context.Context, p string, obj *vfs.VirtualObject) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	file, exists := m.files[p]
-	if !exists {
-		return vfs.ErrNotExist
-	}
-
-	if file.isDir {
-		return vfs.ErrIsDirectory
-	}
-
-	delete(m.files, p)
-	return nil
-}
-
-func (m *MemoryMount) Mkdir(ctx context.Context, p string) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 
 	if _, exists := m.files[p]; exists {
 		return vfs.ErrExist
 	}
 
+	// Create parent directories if needed
+	if err := m.mkdirAllLocked(path.Dir(p)); err != nil {
+		return err
+	}
+
+	isDir := obj.Info.Type == vfs.ObjectTypeDirectory
+	var data []byte
+	var size int64
+
+	if !isDir && obj.Data != nil {
+		var err error
+		data, err = io.ReadAll(obj.Data)
+		if err != nil {
+			return err
+		}
+		size = int64(len(data))
+	}
+
+	metadata := make(map[string]string)
+	if obj.Info.Metadata != nil {
+		metadata = copyMetadata(obj.Info.Metadata)
+	}
+
 	m.files[p] = &MemoryFile{
-		data:    make([]byte, 0),
-		size:    0,
-		isDir:   true,
-		modTime: time.Now(),
+		data:     data,
+		size:     size,
+		isDir:    isDir,
+		modTime:  time.Now(),
+		metadata: metadata,
 	}
 
 	return nil
 }
 
-func (m *MemoryMount) RemoveAll(ctx context.Context, p string) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (m *MemoryMount) Update(ctx context.Context, p string, obj *vfs.VirtualObject) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	if _, exists := m.files[p]; !exists {
-		return vfs.ErrNotExist
+	file, exists := m.files[p]
+	if !exists {
+		return false, nil
 	}
 
-	prefix := p
-	if prefix != "" {
-		prefix += "/"
+	// Cannot change type
+	isDir := obj.Info.Type == vfs.ObjectTypeDirectory
+	if file.isDir != isDir {
+		return false, fmt.Errorf("cannot change object type")
 	}
 
-	for filePath := range m.files {
-		if filePath == p || strings.HasPrefix(filePath, prefix) {
-			delete(m.files, filePath)
+	// Update data if provided and not a directory
+	if !isDir && obj.Data != nil {
+		data, err := io.ReadAll(obj.Data)
+		if err != nil {
+			return false, err
+		}
+		file.data = data
+		file.size = int64(len(data))
+	}
+
+	// Update metadata
+	if obj.Info.Metadata != nil {
+		file.metadata = copyMetadata(obj.Info.Metadata)
+	}
+
+	file.modTime = time.Now()
+
+	return true, nil
+}
+
+func (m *MemoryMount) Delete(ctx context.Context, p string, force bool) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	file, exists := m.files[p]
+	if !exists {
+		return false, nil
+	}
+
+	// If it's a directory and force is false, check if it has children
+	if file.isDir && !force {
+		prefix := p
+		if prefix != "" {
+			prefix += "/"
+		}
+
+		for filePath := range m.files {
+			if filePath != p && strings.HasPrefix(filePath, prefix) {
+				return false, fmt.Errorf("directory not empty")
+			}
 		}
 	}
 
-	return nil
+	// Remove file or directory
+	if force && file.isDir {
+		// Remove all children
+		prefix := p
+		if prefix != "" {
+			prefix += "/"
+		}
+
+		for filePath := range m.files {
+			if filePath == p || strings.HasPrefix(filePath, prefix) {
+				delete(m.files, filePath)
+			}
+		}
+	} else {
+		delete(m.files, p)
+	}
+
+	return true, nil
+}
+
+func (m *MemoryMount) Upsert(ctx context.Context, p string, source any) error {
+	// Check if exists
+	_, err := m.Stat(ctx, p)
+	exists := err == nil
+
+	// Convert source to VirtualObject
+	obj, err := m.sourceToObject(p, source)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		_, err = m.Update(ctx, p, obj)
+		return err
+	}
+
+	return m.Create(ctx, p, obj)
+}
+
+func (m *MemoryMount) sourceToObject(p string, source any) (*vfs.VirtualObject, error) {
+	switch v := source.(type) {
+	case *vfs.VirtualObject:
+		return v, nil
+	case []byte:
+		return &vfs.VirtualObject{
+			Info: vfs.VirtualObjectInfo{
+				Path:    p,
+				Name:    path.Base(p),
+				Type:    vfs.ObjectTypeFile,
+				Size:    int64(len(v)),
+				Mode:    0644,
+				ModTime: time.Now(),
+			},
+			Data: bytes.NewReader(v),
+		}, nil
+	case io.Reader:
+		data, err := io.ReadAll(v)
+		if err != nil {
+			return nil, err
+		}
+		return &vfs.VirtualObject{
+			Info: vfs.VirtualObjectInfo{
+				Path:    p,
+				Name:    path.Base(p),
+				Type:    vfs.ObjectTypeFile,
+				Size:    int64(len(data)),
+				Mode:    0644,
+				ModTime: time.Now(),
+			},
+			Data: bytes.NewReader(data),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported source type: %T", source)
+	}
 }
 
 func (m *MemoryMount) mkdirAllLocked(p string) error {
@@ -257,54 +410,21 @@ func (m *MemoryMount) mkdirAllLocked(p string) error {
 
 	// Create this directory
 	m.files[p] = &MemoryFile{
-		isDir:   true,
-		modTime: time.Now(),
+		isDir:    true,
+		modTime:  time.Now(),
+		metadata: make(map[string]string),
 	}
 
 	return nil
 }
 
-// memFileWriter implements io.WriteCloser for in-memory files.
-type MemoryFileWriter struct {
-	memory *MemoryMount
-	path   string
-	buf    *bytes.Buffer
-	closed bool
-}
-
-func (mfw *MemoryFileWriter) Write(p []byte) (n int, err error) {
-	if mfw.closed {
-		return 0, vfs.ErrClosed
+func copyMetadata(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
 	}
-
-	file, exists := mfw.memory.files[mfw.path]
-	if !exists {
-		return 0, vfs.ErrClosed
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
 	}
-
-	offset, err := mfw.buf.Write(p)
-	if err != nil {
-		return 0, err
-	}
-	file.size += int64(offset)
-
-	return offset, nil
-}
-
-func (mfw *MemoryFileWriter) Close() error {
-	if mfw.closed {
-		return vfs.ErrClosed
-	}
-	mfw.closed = true
-
-	mfw.memory.mu.Lock()
-	defer mfw.memory.mu.Unlock()
-
-	// Update file data
-	if file, exists := mfw.memory.files[mfw.path]; exists {
-		file.data = mfw.buf.Bytes()
-		file.modTime = time.Now()
-	}
-
-	return nil
+	return dst
 }

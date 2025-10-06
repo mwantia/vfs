@@ -6,10 +6,45 @@ import (
 	"time"
 )
 
-// Mount represents a mounted filesystem handler.
+// VirtualMount represents a mounted filesystem.
 // Implementations provide access to a specific storage backend.
 // All paths passed to Mount methods are relative to the mount point.
 type VirtualMount interface {
+	// Geturns a list of supported capabilities for this mount
+	GetCapabilities() VirtualMountCapabilities
+
+	// Stat returns information about a virtual object.
+	// Returns ErrNotExist if the path doesn't exist.
+	Stat(ctx context.Context, path string) (*VirtualObjectInfo, error)
+
+	// List returns all virtual objects under the given path.
+	// For files, returns single entry. For directory, returns children.
+	List(ctx context.Context, path string) ([]*VirtualObjectInfo, error)
+
+	// Get retrieves a virtual object and its metadata information.
+	Get(ctx context.Context, path string) (*VirtualObject, error)
+
+	// Create will create a new virtual object.
+	// Returns ErrExist if the path already exist.
+	Create(ctx context.Context, path string, obj *VirtualObject) error
+
+	// Update will update an existing virtual object.
+	// Returns false (no error), if the path doesn't exist.
+	Update(ctx context.Context, path string, obj *VirtualObject) (bool, error)
+
+	// Delete removes an virtual object.
+	// If force is true and object is directory, removes all children.
+	Delete(ctx context.Context, path string, force bool) (bool, error)
+
+	// Upsert either creates or updates a virtual object.
+	// It uses Stat to determine if the virtual object already exists or not.
+	Upsert(ctx context.Context, path string, source any) error
+}
+
+// Mount represents a mounted filesystem handler.
+// Implementations provide access to a specific storage backend.
+// All paths passed to Mount methods are relative to the mount point.
+type OldVirtualMount interface {
 	// Stat returns information about a file or directory.
 	// Returns ErrNotExist if the path does not exist.
 	Stat(ctx context.Context, path string) (*VirtualFileInfo, error)

@@ -2,7 +2,6 @@ package mounts
 
 import (
 	"context"
-	"io"
 
 	"github.com/mwantia/vfs"
 )
@@ -21,37 +20,34 @@ func NewReadOnly(mount vfs.VirtualMount) *ReadOnlyMount {
 	}
 }
 
-// Stat passes through to the underlying mount.
-func (rom *ReadOnlyMount) Stat(ctx context.Context, path string) (*vfs.VirtualFileInfo, error) {
+func (rom *ReadOnlyMount) GetCapabilities() vfs.VirtualMountCapabilities {
+	return rom.mount.GetCapabilities()
+}
+
+func (rom *ReadOnlyMount) Stat(ctx context.Context, path string) (*vfs.VirtualObjectInfo, error) {
 	return rom.mount.Stat(ctx, path)
 }
 
-// ReadDir passes through to the underlying mount.
-func (rom *ReadOnlyMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualFileInfo, error) {
-	return rom.mount.ReadDir(ctx, path)
+func (rom *ReadOnlyMount) List(ctx context.Context, path string) ([]*vfs.VirtualObjectInfo, error) {
+	return rom.mount.List(ctx, path)
 }
 
-// Open passes through to the underlying mount.
-func (rom *ReadOnlyMount) Open(ctx context.Context, path string) (io.ReadCloser, error) {
-	return rom.mount.Open(ctx, path)
+func (rom *ReadOnlyMount) Get(ctx context.Context, path string) (*vfs.VirtualObject, error) {
+	return rom.mount.Get(ctx, path)
 }
 
-// Create returns ErrReadOnly.
-func (*ReadOnlyMount) Create(ctx context.Context, path string) (io.WriteCloser, error) {
-	return nil, vfs.ErrReadOnly
-}
-
-// Remove returns ErrReadOnly.
-func (*ReadOnlyMount) Remove(ctx context.Context, path string) error {
+func (rom *ReadOnlyMount) Create(ctx context.Context, path string, obj *vfs.VirtualObject) error {
 	return vfs.ErrReadOnly
 }
 
-// Mkdir returns ErrReadOnly.
-func (*ReadOnlyMount) Mkdir(ctx context.Context, path string) error {
-	return vfs.ErrReadOnly
+func (rom *ReadOnlyMount) Update(ctx context.Context, path string, obj *vfs.VirtualObject) (bool, error) {
+	return false, vfs.ErrReadOnly
 }
 
-// RemoveAll returns ErrReadOnly.
-func (*ReadOnlyMount) RemoveAll(ctx context.Context, path string) error {
+func (rom *ReadOnlyMount) Delete(ctx context.Context, path string, force bool) (bool, error) {
+	return false, vfs.ErrReadOnly
+}
+
+func (rom *ReadOnlyMount) Upsert(ctx context.Context, path string, source any) error {
 	return vfs.ErrReadOnly
 }

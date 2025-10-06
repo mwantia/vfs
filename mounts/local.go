@@ -1,8 +1,10 @@
 package mounts
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -32,8 +34,16 @@ func (lm *LocalMount) resolvePath(path string) string {
 	return filepath.Join(lm.root, filepath.Clean(path))
 }
 
-// Stat returns file information for the given path.
-func (lm *LocalMount) Stat(ctx context.Context, path string) (*vfs.VirtualFileInfo, error) {
+func (lm *LocalMount) GetCapabilities() vfs.VirtualMountCapabilities {
+	return vfs.VirtualMountCapabilities{
+		Capabilities: []vfs.VirtualMountCapability{
+			vfs.VirtualMountCapabilityCRUD,
+			vfs.VirtualMountCapabilityPermissions,
+		},
+	}
+}
+
+func (lm *LocalMount) Stat(ctx context.Context, path string) (*vfs.VirtualObjectInfo, error) {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
@@ -54,12 +64,32 @@ func (lm *LocalMount) Stat(ctx context.Context, path string) (*vfs.VirtualFileIn
 	return lm.fileInfoToVirtual(info, path), nil
 }
 
-// ReadDir lists directory contents for the given path.
-func (lm *LocalMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualFileInfo, error) {
+func (lm *LocalMount) List(ctx context.Context, path string) ([]*vfs.VirtualObjectInfo, error) {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
 	fullPath := lm.resolvePath(path)
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, vfs.ErrNotExist
+		}
+
+		if errors.Is(err, fs.ErrPermission) {
+			return nil, vfs.ErrPermission
+		}
+
+		return nil, err
+	}
+
+	// For files, return single entry
+	if !info.IsDir() {
+		return []*vfs.VirtualObjectInfo{
+			lm.fileInfoToVirtual(info, path),
+		}, nil
+	}
+
+	// For directories, return children
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -70,15 +100,10 @@ func (lm *LocalMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualF
 			return nil, vfs.ErrPermission
 		}
 
-		info, statErr := os.Stat(fullPath)
-		if statErr == nil && !info.IsDir() {
-			return nil, vfs.ErrNotDirectory
-		}
-
 		return nil, err
 	}
 
-	infos := make([]*vfs.VirtualFileInfo, 0, len(entries))
+	infos := make([]*vfs.VirtualObjectInfo, 0, len(entries))
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
@@ -92,8 +117,7 @@ func (lm *LocalMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualF
 	return infos, nil
 }
 
-// Open opens a file for reading.
-func (lm *LocalMount) Open(ctx context.Context, path string) (io.ReadCloser, error) {
+func (lm *LocalMount) Get(ctx context.Context, path string) (*vfs.VirtualObject, error) {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
@@ -111,10 +135,17 @@ func (lm *LocalMount) Open(ctx context.Context, path string) (io.ReadCloser, err
 		return nil, err
 	}
 
+	objInfo := lm.fileInfoToVirtual(info, path)
+
+	// For directories, no data reader
 	if info.IsDir() {
-		return nil, vfs.ErrIsDirectory
+		return &vfs.VirtualObject{
+			Info: *objInfo,
+			Data: nil,
+		}, nil
 	}
 
+	// For files, open for reading
 	file, err := os.Open(fullPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -128,91 +159,61 @@ func (lm *LocalMount) Open(ctx context.Context, path string) (io.ReadCloser, err
 		return nil, err
 	}
 
-	return file, nil
+	// Read entire file into memory
+	data, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return &vfs.VirtualObject{
+		Info: *objInfo,
+		Data: bytes.NewReader(data),
+	}, nil
 }
 
-// Create creates a new file for writing.
-func (lm *LocalMount) Create(ctx context.Context, path string) (io.WriteCloser, error) {
+func (lm *LocalMount) Create(ctx context.Context, path string, obj *vfs.VirtualObject) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
 	fullPath := lm.resolvePath(path)
-	info, err := os.Stat(fullPath)
-	if err == nil && info.IsDir() {
-		return nil, vfs.ErrIsDirectory
+
+	// Check if already exists
+	if _, err := os.Stat(fullPath); err == nil {
+		return vfs.ErrExist
 	}
 
+	isDir := obj.Info.Type == vfs.ObjectTypeDirectory
+
+	if isDir {
+		// Create directory
+		err := os.MkdirAll(fullPath, 0755)
+		if err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return vfs.ErrExist
+			}
+
+			if errors.Is(err, fs.ErrPermission) {
+				return vfs.ErrPermission
+			}
+
+			return err
+		}
+		return nil
+	}
+
+	// Create parent directories if needed
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		if errors.Is(err, fs.ErrPermission) {
-			return nil, vfs.ErrPermission
+			return vfs.ErrPermission
 		}
 
-		return nil, err
+		return err
 	}
 
+	// Create file
 	file, err := os.Create(fullPath)
-	if err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return nil, vfs.ErrExist
-		}
-
-		if errors.Is(err, fs.ErrPermission) {
-			return nil, vfs.ErrPermission
-		}
-
-		return nil, err
-	}
-
-	return file, nil
-}
-
-// Remove deletes a file.
-func (lm *LocalMount) Remove(ctx context.Context, path string) error {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-
-	fullPath := lm.resolvePath(path)
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return vfs.ErrNotExist
-		}
-
-		if errors.Is(err, fs.ErrPermission) {
-			return vfs.ErrPermission
-		}
-
-		return err
-	}
-
-	if info.IsDir() {
-		return vfs.ErrIsDirectory
-	}
-
-	err = os.Remove(fullPath)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return vfs.ErrNotExist
-		}
-
-		if errors.Is(err, fs.ErrPermission) {
-			return vfs.ErrPermission
-		}
-
-		return err
-	}
-
-	return nil
-}
-
-// Mkdir creates a directory.
-func (lm *LocalMount) Mkdir(ctx context.Context, path string) error {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-
-	fullPath := lm.resolvePath(path)
-	err := os.Mkdir(fullPath, 0755)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return vfs.ErrExist
@@ -224,53 +225,197 @@ func (lm *LocalMount) Mkdir(ctx context.Context, path string) error {
 
 		return err
 	}
+	defer file.Close()
+
+	// Write data if provided
+	if obj.Data != nil {
+		if _, err := io.Copy(file, obj.Data); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
-// RemoveAll removes a directory and all its contents.
-func (lm *LocalMount) RemoveAll(ctx context.Context, path string) error {
+func (lm *LocalMount) Update(ctx context.Context, path string, obj *vfs.VirtualObject) (bool, error) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
 	fullPath := lm.resolvePath(path)
-	if _, err := os.Stat(fullPath); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return vfs.ErrNotExist
-		}
 
-		if errors.Is(err, fs.ErrPermission) {
-			return vfs.ErrPermission
-		}
-
-		return err
-	}
-
-	err := os.RemoveAll(fullPath)
+	// Check if exists
+	info, err := os.Stat(fullPath)
 	if err != nil {
-		if errors.Is(err, fs.ErrPermission) {
-			return vfs.ErrPermission
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
 		}
 
-		return err
+		if errors.Is(err, fs.ErrPermission) {
+			return false, vfs.ErrPermission
+		}
+
+		return false, err
 	}
 
-	return nil
+	// Cannot change type
+	isDir := obj.Info.Type == vfs.ObjectTypeDirectory
+	if info.IsDir() != isDir {
+		return false, fmt.Errorf("cannot change object type")
+	}
+
+	// For directories, nothing to update
+	if isDir {
+		return true, nil
+	}
+
+	// For files, update data if provided
+	if obj.Data != nil {
+		file, err := os.Create(fullPath)
+		if err != nil {
+			if errors.Is(err, fs.ErrPermission) {
+				return false, vfs.ErrPermission
+			}
+
+			return false, err
+		}
+		defer file.Close()
+
+		if _, err := io.Copy(file, obj.Data); err != nil {
+			return false, err
+		}
+	}
+
+	return true, nil
 }
 
-// fileInfoToVirtual converts os.FileInfo to VirtualFileInfo.
-func (lm *LocalMount) fileInfoToVirtual(info fs.FileInfo, path string) *vfs.VirtualFileInfo {
+func (lm *LocalMount) Delete(ctx context.Context, path string, force bool) (bool, error) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	fullPath := lm.resolvePath(path)
+
+	// Check if exists
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+
+		if errors.Is(err, fs.ErrPermission) {
+			return false, vfs.ErrPermission
+		}
+
+		return false, err
+	}
+
+	// If it's a directory
+	if info.IsDir() {
+		if force {
+			// Remove all
+			err = os.RemoveAll(fullPath)
+		} else {
+			// Check if empty
+			entries, err := os.ReadDir(fullPath)
+			if err != nil {
+				return false, err
+			}
+			if len(entries) > 0 {
+				return false, fmt.Errorf("directory not empty")
+			}
+			err = os.Remove(fullPath)
+		}
+	} else {
+		// Remove file
+		err = os.Remove(fullPath)
+	}
+
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+
+		if errors.Is(err, fs.ErrPermission) {
+			return false, vfs.ErrPermission
+		}
+
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (lm *LocalMount) Upsert(ctx context.Context, path string, source any) error {
+	// Check if exists
+	_, err := lm.Stat(ctx, path)
+	exists := err == nil
+
+	// Convert source to VirtualObject
+	obj, err := lm.sourceToObject(path, source)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		_, err = lm.Update(ctx, path, obj)
+		return err
+	}
+
+	return lm.Create(ctx, path, obj)
+}
+
+func (lm *LocalMount) sourceToObject(path string, source any) (*vfs.VirtualObject, error) {
+	switch v := source.(type) {
+	case *vfs.VirtualObject:
+		return v, nil
+	case []byte:
+		return &vfs.VirtualObject{
+			Info: vfs.VirtualObjectInfo{
+				Path: path,
+				Name: filepath.Base(path),
+				Type: vfs.ObjectTypeFile,
+				Size: int64(len(v)),
+				Mode: 0644,
+			},
+			Data: bytes.NewReader(v),
+		}, nil
+	case io.Reader:
+		data, err := io.ReadAll(v)
+		if err != nil {
+			return nil, err
+		}
+		return &vfs.VirtualObject{
+			Info: vfs.VirtualObjectInfo{
+				Path: path,
+				Name: filepath.Base(path),
+				Type: vfs.ObjectTypeFile,
+				Size: int64(len(data)),
+				Mode: 0644,
+			},
+			Data: bytes.NewReader(data),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported source type: %T", source)
+	}
+}
+
+// fileInfoToVirtual converts os.FileInfo to VirtualObjectInfo.
+func (lm *LocalMount) fileInfoToVirtual(info fs.FileInfo, path string) *vfs.VirtualObjectInfo {
+	objType := vfs.ObjectTypeFile
+	if info.IsDir() {
+		objType = vfs.ObjectTypeDirectory
+	}
+
 	mode := vfs.VirtualFileMode(info.Mode().Perm())
 	if info.IsDir() {
 		mode |= vfs.ModeDir
 	}
 
-	return &vfs.VirtualFileInfo{
-		Name:    info.Name(),
+	return &vfs.VirtualObjectInfo{
 		Path:    path,
+		Name:    info.Name(),
+		Type:    objType,
 		Size:    info.Size(),
 		Mode:    mode,
-		IsDir:   info.IsDir(),
 		ModTime: info.ModTime(),
 	}
 }
