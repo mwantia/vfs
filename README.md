@@ -44,23 +44,23 @@ import (
 
 func main() {
     // Create a new VFS
-    fs := vfs.New()
-    
+    fs := vfs.NewVfs()
+
     // Mount a read-only memory filesystem at root
-    root := handlers.NewMemory()
+    root := mounts.NewMemory()
     fs.Mount("/", root, vfs.WithReadOnly(true))
-    
+
     // Mount your custom handler
     myHandler := &MyCustomHandler{}
     fs.Mount("/data", myHandler, vfs.WithType("custom"))
-    
+
     // Use the VFS
     info, err := fs.Stat(context.Background(), "/data/file.txt")
     if err != nil {
         panic(err)
     }
-    
-    fmt.Printf("File size: %d bytes\n", info.Size)
+
+    fmt.Printf("File size: %d bytes\n", info.Size())
 }
 ```
 
@@ -68,12 +68,12 @@ func main() {
 
 ### Mounts
 
-A **mount** is a storage backend attached to a specific path in the VFS. Each mount implements the `Mount` interface and handles operations for its subtree.
+A **mount** is a storage backend attached to a specific path in the VFS. Each mount implements the `VirtualMount` interface and handles operations for its subtree.
 
 ```go
-type Mount interface {
-    Stat(ctx context.Context, path string) (*FileInfo, error)
-    ReadDir(ctx context.Context, path string) ([]*FileInfo, error)
+type VirtualMount interface {
+    Stat(ctx context.Context, path string) (*VirtualFileInfo, error)
+    ReadDir(ctx context.Context, path string) ([]*VirtualFileInfo, error)
     Open(ctx context.Context, path string) (io.ReadCloser, error)
     Create(ctx context.Context, path string) (io.WriteCloser, error)
     Remove(ctx context.Context, path string) error
@@ -88,13 +88,13 @@ VFS uses **longest-prefix matching** to find the correct mount:
 
 ```
 Mounts:
-  /           → MemoryHandler
-  /data       → S3Handler
-  /data/cache → CacheHandler
+  /           → MemoryMount
+  /data       → S3Mount
+  /data/cache → CacheMount
 
 Access: /data/cache/file.txt
   → Matches "/data/cache" (longest prefix)
-  → Calls CacheHandler.Open(ctx, "file.txt")
+  → Calls CacheMount.Open(ctx, "file.txt")
 ```
 
 ### Mount Hierarchy
@@ -102,87 +102,81 @@ Access: /data/cache/file.txt
 Mounts can be nested:
 
 ```go
-fs.Mount("/", rootHandler)
-fs.Mount("/data", dataHandler)
-fs.Mount("/data/temp", tempHandler)
+fs.Mount("/", rootMount)
+fs.Mount("/data", dataMount)
+fs.Mount("/data/temp", tempMount)
 ```
 
 Unmounting requires removing child mounts first (safe by default).
 
 ## Implementing a Custom Mount
 
-Here's a simple example of a custom mount handler:
+Here's a simple example of a custom mount:
 
 ```go
-type MyHandler struct {
+type MyMount struct {
     // Your storage backend
 }
 
-func (h *MyHandler) Stat(ctx context.Context, path string) (*vfs.FileInfo, error) {
+func (m *MyMount) Stat(ctx context.Context, path string) (*vfs.VirtualFileInfo, error) {
     // Return file information
-    return &vfs.FileInfo{
-        Name:    path,
-        Size:    1024,
-        Mode:    0644,
-        ModTime: time.Now(),
-        IsDir:   false,
-    }, nil
+    return vfs.NewFileInfo(path, 1024, 0644, time.Now(), false), nil
 }
 
-func (h *MyHandler) ReadDir(ctx context.Context, path string) ([]*vfs.FileInfo, error) {
+func (m *MyMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualFileInfo, error) {
     // Return directory contents
-    return []*vfs.FileInfo{
-        {Name: "file1.txt", Size: 100, IsDir: false},
-        {Name: "subdir", Size: 0, IsDir: true},
+    return []*vfs.VirtualFileInfo{
+        vfs.NewFileInfo("file1.txt", 100, 0644, time.Now(), false),
+        vfs.NewFileInfo("subdir", 0, 0755, time.Now(), true),
     }, nil
 }
 
-func (h *MyHandler) Open(ctx context.Context, path string) (io.ReadCloser, error) {
+func (m *MyMount) Open(ctx context.Context, path string) (io.ReadCloser, error) {
     // Return a reader for the file
     return os.Open(path)
 }
 
-func (h *MyHandler) Create(ctx context.Context, path string) (io.WriteCloser, error) {
+func (m *MyMount) Create(ctx context.Context, path string) (io.WriteCloser, error) {
     // Return a writer for the file
     return os.Create(path)
 }
 
-func (h *MyHandler) Remove(ctx context.Context, path string) error {
+func (m *MyMount) Remove(ctx context.Context, path string) error {
     // Remove a file
     return os.Remove(path)
 }
 
-func (h *MyHandler) Mkdir(ctx context.Context, path string) error {
+func (m *MyMount) Mkdir(ctx context.Context, path string) error {
     // Create a directory
     return os.Mkdir(path, 0755)
 }
 
-func (h *MyHandler) RemoveAll(ctx context.Context, path string) error {
+func (m *MyMount) RemoveAll(ctx context.Context, path string) error {
     // Remove directory and contents
     return os.RemoveAll(path)
 }
 ```
 
-## Built-in Handlers
+## Built-in Mounts
 
-### Memory Handler
+### Memory Mount
 
 In-memory filesystem, useful for testing or temporary root:
 
 ```go
-import "github.com/mwantia/vfs/handlers"
+import "github.com/mwantia/vfs/mounts"
 
-mem := handlers.NewMemory()
+mem := mounts.NewMemory()
 fs.Mount("/", mem)
 ```
 
 ### ReadOnly Wrapper
 
-Wraps any handler to make it read-only:
+Wraps any mount to make it read-only:
 
 ```go
-handler := &MyHandler{}
-readOnly := handlers.NewReadOnly(handler)
+mount := &MyMount{}
+readOnly := mounts.NewReadOnly(mount)
 fs.Mount("/readonly", readOnly)
 ```
 
@@ -192,13 +186,13 @@ fs.Mount("/readonly", readOnly)
 
 ```go
 // Mount management
-Mount(path string, mount Mount, opts ...MountOption) error
+Mount(path string, mount VirtualMount, opts ...VirtualMountOption) error
 Unmount(path string) error
-Mounts() []MountInfo
+Mounts() []VirtualMountInfo
 
 // File operations
-Stat(ctx context.Context, path string) (*FileInfo, error)
-ReadDir(ctx context.Context, path string) ([]*FileInfo, error)
+Stat(ctx context.Context, path string) (*VirtualFileInfo, error)
+ReadDir(ctx context.Context, path string) ([]*VirtualFileInfo, error)
 Open(ctx context.Context, path string) (io.ReadCloser, error)
 Create(ctx context.Context, path string) (io.WriteCloser, error)
 Remove(ctx context.Context, path string) error
@@ -232,26 +226,21 @@ vfs.ErrReadOnly        // Read-only filesystem
 ### Example 1: S3 Backend
 
 ```go
-type S3Handler struct {
+type S3Mount struct {
     bucket string
     client *s3.Client
 }
 
-func (h *S3Handler) Stat(ctx context.Context, path string) (*vfs.FileInfo, error) {
-    obj, err := h.client.HeadObject(ctx, &s3.HeadObjectInput{
-        Bucket: &h.bucket,
+func (m *S3Mount) Stat(ctx context.Context, path string) (*vfs.VirtualFileInfo, error) {
+    obj, err := m.client.HeadObject(ctx, &s3.HeadObjectInput{
+        Bucket: &m.bucket,
         Key:    &path,
     })
     if err != nil {
         return nil, vfs.ErrNotExist
     }
-    
-    return &vfs.FileInfo{
-        Name:    path,
-        Size:    *obj.ContentLength,
-        ModTime: *obj.LastModified,
-        IsDir:   false,
-    }, nil
+
+    return vfs.NewFileInfo(path, *obj.ContentLength, 0644, *obj.LastModified, false), nil
 }
 
 // ... implement other methods
@@ -260,25 +249,27 @@ func (h *S3Handler) Stat(ctx context.Context, path string) (*vfs.FileInfo, error
 ### Example 2: Database-backed Virtual Files
 
 ```go
-type DBHandler struct {
+type DBMount struct {
     db *sql.DB
 }
 
-func (h *DBHandler) ReadDir(ctx context.Context, path string) ([]*vfs.FileInfo, error) {
-    rows, err := h.db.QueryContext(ctx, 
+func (m *DBMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualFileInfo, error) {
+    rows, err := m.db.QueryContext(ctx,
         "SELECT name, size, modified FROM files WHERE parent = ?", path)
     if err != nil {
         return nil, err
     }
     defer rows.Close()
-    
-    var infos []*vfs.FileInfo
+
+    var infos []*vfs.VirtualFileInfo
     for rows.Next() {
-        var info vfs.FileInfo
-        rows.Scan(&info.Name, &info.Size, &info.ModTime)
-        infos = append(infos, &info)
+        var name string
+        var size int64
+        var modTime time.Time
+        rows.Scan(&name, &size, &modTime)
+        infos = append(infos, vfs.NewFileInfo(name, size, 0644, modTime, false))
     }
-    
+
     return infos, nil
 }
 
@@ -288,29 +279,24 @@ func (h *DBHandler) ReadDir(ctx context.Context, path string) ([]*vfs.FileInfo, 
 ### Example 3: Filter/Query-based Virtual Filesystem
 
 ```go
-type FilterHandler struct {
+type FilterMount struct {
     metadata MetadataStore
     query    string
 }
 
-func (h *FilterHandler) ReadDir(ctx context.Context, path string) ([]*vfs.FileInfo, error) {
+func (m *FilterMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualFileInfo, error) {
     // Execute query to find matching files
-    files, err := h.metadata.Query(ctx, h.query)
+    files, err := m.metadata.Query(ctx, m.query)
     if err != nil {
         return nil, err
     }
-    
-    // Convert to FileInfo
-    var infos []*vfs.FileInfo
+
+    // Convert to VirtualFileInfo
+    var infos []*vfs.VirtualFileInfo
     for _, f := range files {
-        infos = append(infos, &vfs.FileInfo{
-            Name:    f.Name,
-            Size:    f.Size,
-            ModTime: f.ModTime,
-            IsDir:   false,
-        })
+        infos = append(infos, vfs.NewFileInfo(f.Name, f.Size, 0644, f.ModTime, false))
     }
-    
+
     return infos, nil
 }
 
@@ -352,22 +338,22 @@ func (h *FilterHandler) ReadDir(ctx context.Context, path string) ([]*vfs.FileIn
 ## Testing
 
 ```go
-func TestMyHandler(t *testing.T) {
-    fs := vfs.New()
-    handler := &MyHandler{}
-    
-    err := fs.Mount("/test", handler)
+func TestMyMount(t *testing.T) {
+    fs := vfs.NewVfs()
+    mount := &MyMount{}
+
+    err := fs.Mount("/test", mount)
     if err != nil {
         t.Fatal(err)
     }
-    
+
     info, err := fs.Stat(context.Background(), "/test/file.txt")
     if err != nil {
         t.Fatal(err)
     }
-    
-    if info.Size != 1024 {
-        t.Errorf("expected size 1024, got %d", info.Size)
+
+    if info.Size() != 1024 {
+        t.Errorf("expected size 1024, got %d", info.Size())
     }
 }
 ```
