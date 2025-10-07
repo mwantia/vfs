@@ -20,14 +20,14 @@ func TestReadOnlyMount_ReadOperations(t *testing.T) {
 	}
 
 	// Populate with data
-	w, _ := fs.OpenWrite(ctx, "/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
-	w.Write([]byte("readonly test"))
-	w.Close()
+	f, _ := fs.Open(ctx, "/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
+	f.Write([]byte("readonly test"))
+	f.Close()
 
 	fs.MkDir(ctx, "/dir")
-	w, _ = fs.OpenWrite(ctx, "/dir/nested.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
-	w.Write([]byte("nested"))
-	w.Close()
+	f, _ = fs.Open(ctx, "/dir/nested.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
+	f.Write([]byte("nested"))
+	f.Close()
 
 	// Unmount and remount as readonly
 	fs.Unmount(ctx, "/")
@@ -44,14 +44,14 @@ func TestReadOnlyMount_ReadOperations(t *testing.T) {
 		t.Error("Expected file, got directory")
 	}
 
-	// OpenRead should work
-	r, err := fs.OpenRead(ctx, "/file.txt", vfs.AccessModeRead)
+	// Open for reading should work
+	f, err = fs.Open(ctx, "/file.txt", vfs.AccessModeRead)
 	if err != nil {
-		t.Fatalf("OpenRead failed: %v", err)
+		t.Fatalf("Open for read failed: %v", err)
 	}
-	defer r.Close()
+	defer f.Close()
 
-	data, _ := io.ReadAll(r)
+	data, _ := io.ReadAll(f)
 	if string(data) != "readonly test" {
 		t.Errorf("Expected 'readonly test', got %q", data)
 	}
@@ -75,10 +75,10 @@ func TestReadOnlyMount_WriteOperationsFail(t *testing.T) {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	// OpenWrite should fail due to Create failing on readonly mount
-	_, err := fs.OpenWrite(ctx, "/test.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
+	// Open for writing should fail due to Create failing on readonly mount
+	_, err := fs.Open(ctx, "/test.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	if err != vfs.ErrReadOnly {
-		t.Errorf("Expected ErrReadOnly on OpenWrite, got %v", err)
+		t.Errorf("Expected ErrReadOnly on Open for write, got %v", err)
 	}
 
 	// MkDir should fail
@@ -97,9 +97,9 @@ func TestReadOnlyMount_DeleteOperationsFail(t *testing.T) {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	w, _ := fs.OpenWrite(ctx, "/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
-	w.Write([]byte("test"))
-	w.Close()
+	f, _ := fs.Open(ctx, "/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
+	f.Write([]byte("test"))
+	f.Close()
 
 	fs.MkDir(ctx, "/dir")
 

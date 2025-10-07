@@ -19,28 +19,28 @@ func TestMemoryMount_FileOperations(t *testing.T) {
 	}
 
 	// Create and write file
-	w, err := fs.OpenWrite(ctx, "/test.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
+	f, err := fs.Open(ctx, "/test.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	if err != nil {
-		t.Fatalf("OpenWrite failed: %v", err)
+		t.Fatalf("Open for write failed: %v", err)
 	}
 
 	data := []byte("hello world")
-	if _, err := w.Write(data); err != nil {
+	if _, err := f.Write(data); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	if err := w.Close(); err != nil {
+	if err := f.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
 
 	// Read file
-	r, err := fs.OpenRead(ctx, "/test.txt", vfs.AccessModeRead)
+	f, err = fs.Open(ctx, "/test.txt", vfs.AccessModeRead)
 	if err != nil {
-		t.Fatalf("OpenRead failed: %v", err)
+		t.Fatalf("Open for read failed: %v", err)
 	}
-	defer r.Close()
+	defer f.Close()
 
-	got, err := io.ReadAll(r)
+	got, err := io.ReadAll(f)
 	if err != nil {
 		t.Fatalf("ReadAll failed: %v", err)
 	}
@@ -75,12 +75,12 @@ func TestMemoryMount_DirectoryOperations(t *testing.T) {
 
 	// Create files in directory
 	for i, name := range []string{"file1.txt", "file2.txt", "file3.txt"} {
-		w, err := fs.OpenWrite(ctx, "/data/"+name, vfs.AccessModeWrite|vfs.AccessModeCreate)
+		f, err := fs.Open(ctx, "/data/"+name, vfs.AccessModeWrite|vfs.AccessModeCreate)
 		if err != nil {
-			t.Fatalf("OpenWrite %s failed: %v", name, err)
+			t.Fatalf("Open %s failed: %v", name, err)
 		}
-		w.Write([]byte{byte(i)})
-		w.Close()
+		f.Write([]byte{byte(i)})
+		f.Close()
 	}
 
 	// List directory
@@ -124,12 +124,12 @@ func TestMemoryMount_NestedPaths(t *testing.T) {
 	}
 
 	// Create nested file
-	w, err := fs.OpenWrite(ctx, "/a/b/c/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
+	f, err := fs.Open(ctx, "/a/b/c/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	if err != nil {
-		t.Fatalf("OpenWrite nested file failed: %v", err)
+		t.Fatalf("Open nested file failed: %v", err)
 	}
-	w.Write([]byte("nested"))
-	w.Close()
+	f.Write([]byte("nested"))
+	f.Close()
 
 	// Verify file exists
 	info, err := fs.Stat(ctx, "/a/b/c/file.txt")
@@ -165,9 +165,9 @@ func TestMemoryMount_ErrorCases(t *testing.T) {
 		t.Errorf("Expected ErrNotExist, got %v", err)
 	}
 
-	// OpenRead non-existent file
-	if _, err := fs.OpenRead(ctx, "/nonexistent", vfs.AccessModeRead); err != vfs.ErrNotExist {
-		t.Errorf("Expected ErrNotExist on OpenRead, got %v", err)
+	// Open non-existent file for reading
+	if _, err := fs.Open(ctx, "/nonexistent", vfs.AccessModeRead); err != vfs.ErrNotExist {
+		t.Errorf("Expected ErrNotExist on Open for read, got %v", err)
 	}
 
 	// Create directory
@@ -175,8 +175,8 @@ func TestMemoryMount_ErrorCases(t *testing.T) {
 		t.Fatalf("MkDir failed: %v", err)
 	}
 
-	// Try to read directory
-	if _, err := fs.OpenRead(ctx, "/testdir", vfs.AccessModeRead); err == nil {
+	// Try to open directory for reading
+	if _, err := fs.Open(ctx, "/testdir", vfs.AccessModeRead); err == nil {
 		t.Error("Expected error opening directory for reading")
 	}
 
