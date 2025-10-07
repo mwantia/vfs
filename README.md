@@ -16,11 +16,12 @@ VFS provides a clean abstraction for building virtual filesystems with multiple 
 ## Features
 
 - **Mount-based architecture**: Everything is a mountpoint, just like Unix VFS
+- **Offset-based I/O**: Efficient streaming with partial reads/writes, no full-file buffering
 - **Longest-prefix matching**: Automatic path resolution to the correct mount
 - **Nested mounts**: Mount filesystems within other filesystems
 - **Thread-safe**: Safe for concurrent access
 - **Storage agnostic**: Works with any backend (S3, databases, memory, local filesystem, etc.)
-- **Simple interface**: Only 7 methods to implement
+- **Simple interface**: Only 8 core methods to implement
 - **No dependencies**: Pure Go, stdlib only
 
 ## Installation
@@ -43,24 +44,26 @@ import (
 )
 
 func main() {
+    ctx := context.Background()
+
     // Create a new VFS
     fs := vfs.NewVfs()
 
-    // Mount a read-only memory filesystem at root
+    // Mount an in-memory filesystem at root
     root := mounts.NewMemory()
-    fs.Mount("/", root, vfs.WithReadOnly(true))
+    fs.Mount(ctx, "/", root)
 
-    // Mount your custom handler
-    myHandler := &MyCustomHandler{}
-    fs.Mount("/data", myHandler, vfs.WithType("custom"))
+    // Write a file
+    w, _ := fs.OpenWrite(ctx, "/data/file.txt")
+    w.Write([]byte("Hello, VFS!"))
+    w.Close()
 
-    // Use the VFS
-    info, err := fs.Stat(context.Background(), "/data/file.txt")
-    if err != nil {
-        panic(err)
-    }
+    // Read the file
+    r, _ := fs.OpenRead(ctx, "/data/file.txt")
+    data, _ := io.ReadAll(r)
+    r.Close()
 
-    fmt.Printf("File size: %d bytes\n", info.Size())
+    fmt.Printf("Content: %s\n", data)
 }
 ```
 
@@ -72,19 +75,25 @@ A **mount** is a storage backend attached to a specific path in the VFS. Each mo
 
 ```go
 type VirtualMount interface {
-    Stat(ctx context.Context, path string) (*VirtualFileInfo, error)
-    ReadDir(ctx context.Context, path string) ([]*VirtualFileInfo, error)
-    Open(ctx context.Context, path string) (io.ReadCloser, error)
-    Create(ctx context.Context, path string) (io.WriteCloser, error)
-    Remove(ctx context.Context, path string) error
-    Mkdir(ctx context.Context, path string) error
-    RemoveAll(ctx context.Context, path string) error
+    // Metadata operations
+    GetCapabilities() VirtualMountCapabilities
+    Stat(ctx context.Context, path string) (*VirtualObjectInfo, error)
+    List(ctx context.Context, path string) ([]*VirtualObjectInfo, error)
+
+    // I/O operations (offset-based)
+    Read(ctx context.Context, path string, offset int64, data []byte) (int, error)
+    Write(ctx context.Context, path string, offset int64, data []byte) (int, error)
+
+    // File/directory management
+    Create(ctx context.Context, path string, isDir bool) error
+    Delete(ctx context.Context, path string, force bool) error
+    Truncate(ctx context.Context, path string, size int64) error
 }
 ```
 
 ### Path Resolution
 
-VFS uses **longest-prefix matching** to find the correct mount:
+VFS uses **longest-prefix matching** to find the correct mount and converts absolute VFS paths to mount-relative paths:
 
 ```
 Mounts:
@@ -94,8 +103,11 @@ Mounts:
 
 Access: /data/cache/file.txt
   → Matches "/data/cache" (longest prefix)
-  → Calls CacheMount.Open(ctx, "file.txt")
+  → Strips mount prefix: "file.txt"
+  → Calls CacheMount.Read(ctx, "file.txt", offset, data)
 ```
+
+All paths passed to mount implementations are **relative to the mount point**, never absolute VFS paths.
 
 ### Mount Hierarchy
 
@@ -111,49 +123,143 @@ Unmounting requires removing child mounts first (safe by default).
 
 ## Implementing a Custom Mount
 
-Here's a simple example of a custom mount:
+Here's a simple example of a custom mount that stores files in memory:
 
 ```go
 type MyMount struct {
-    // Your storage backend
+    mu    sync.RWMutex
+    files map[string][]byte
 }
 
-func (m *MyMount) Stat(ctx context.Context, path string) (*vfs.VirtualFileInfo, error) {
-    // Return file information
-    return vfs.NewFileInfo(path, 1024, 0644, time.Now(), false), nil
+func (m *MyMount) GetCapabilities() vfs.VirtualMountCapabilities {
+    return vfs.VirtualMountCapabilities{
+        Capabilities: []vfs.VirtualMountCapability{
+            vfs.VirtualMountCapabilityCRUD,
+        },
+    }
 }
 
-func (m *MyMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualFileInfo, error) {
-    // Return directory contents
-    return []*vfs.VirtualFileInfo{
-        vfs.NewFileInfo("file1.txt", 100, 0644, time.Now(), false),
-        vfs.NewFileInfo("subdir", 0, 0755, time.Now(), true),
+func (m *MyMount) Stat(ctx context.Context, path string) (*vfs.VirtualObjectInfo, error) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+
+    data, exists := m.files[path]
+    if !exists {
+        return nil, vfs.ErrNotExist
+    }
+
+    return &vfs.VirtualObjectInfo{
+        Path:    path,
+        Name:    filepath.Base(path),
+        Type:    vfs.ObjectTypeFile,
+        Size:    int64(len(data)),
+        Mode:    0644,
+        ModTime: time.Now(),
     }, nil
 }
 
-func (m *MyMount) Open(ctx context.Context, path string) (io.ReadCloser, error) {
-    // Return a reader for the file
-    return os.Open(path)
+func (m *MyMount) List(ctx context.Context, path string) ([]*vfs.VirtualObjectInfo, error) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+
+    var infos []*vfs.VirtualObjectInfo
+    for p, data := range m.files {
+        if filepath.Dir(p) == path {
+            infos = append(infos, &vfs.VirtualObjectInfo{
+                Path:    p,
+                Name:    filepath.Base(p),
+                Type:    vfs.ObjectTypeFile,
+                Size:    int64(len(data)),
+                Mode:    0644,
+                ModTime: time.Now(),
+            })
+        }
+    }
+    return infos, nil
 }
 
-func (m *MyMount) Create(ctx context.Context, path string) (io.WriteCloser, error) {
-    // Return a writer for the file
-    return os.Create(path)
+func (m *MyMount) Read(ctx context.Context, path string, offset int64, data []byte) (int, error) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+
+    file, exists := m.files[path]
+    if !exists {
+        return 0, vfs.ErrNotExist
+    }
+
+    if offset >= int64(len(file)) {
+        return 0, io.EOF
+    }
+
+    n := copy(data, file[offset:])
+    return n, nil
 }
 
-func (m *MyMount) Remove(ctx context.Context, path string) error {
-    // Remove a file
-    return os.Remove(path)
+func (m *MyMount) Write(ctx context.Context, path string, offset int64, data []byte) (int, error) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    file, exists := m.files[path]
+    if !exists {
+        return 0, vfs.ErrNotExist
+    }
+
+    // Extend file if needed
+    newSize := offset + int64(len(data))
+    if newSize > int64(len(file)) {
+        newFile := make([]byte, newSize)
+        copy(newFile, file)
+        file = newFile
+    }
+
+    copy(file[offset:], data)
+    m.files[path] = file
+    return len(data), nil
 }
 
-func (m *MyMount) Mkdir(ctx context.Context, path string) error {
-    // Create a directory
-    return os.Mkdir(path, 0755)
+func (m *MyMount) Create(ctx context.Context, path string, isDir bool) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    if _, exists := m.files[path]; exists {
+        return vfs.ErrExist
+    }
+
+    if !isDir {
+        m.files[path] = []byte{}
+    }
+    return nil
 }
 
-func (m *MyMount) RemoveAll(ctx context.Context, path string) error {
-    // Remove directory and contents
-    return os.RemoveAll(path)
+func (m *MyMount) Delete(ctx context.Context, path string, force bool) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    if _, exists := m.files[path]; !exists {
+        return vfs.ErrNotExist
+    }
+
+    delete(m.files, path)
+    return nil
+}
+
+func (m *MyMount) Truncate(ctx context.Context, path string, size int64) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    file, exists := m.files[path]
+    if !exists {
+        return vfs.ErrNotExist
+    }
+
+    if size < int64(len(file)) {
+        m.files[path] = file[:size]
+    } else if size > int64(len(file)) {
+        newFile := make([]byte, size)
+        copy(newFile, file)
+        m.files[path] = newFile
+    }
+    return nil
 }
 ```
 
@@ -161,13 +267,34 @@ func (m *MyMount) RemoveAll(ctx context.Context, path string) error {
 
 ### Memory Mount
 
-In-memory filesystem, useful for testing or temporary root:
+In-memory filesystem with full CRUD support, useful for testing:
 
 ```go
 import "github.com/mwantia/vfs/mounts"
 
 mem := mounts.NewMemory()
-fs.Mount("/", mem)
+fs.Mount(ctx, "/", mem)
+
+// Create and write file
+w, _ := fs.OpenWrite(ctx, "/test.txt")
+w.Write([]byte("data"))
+w.Close()
+
+// Read file
+r, _ := fs.OpenRead(ctx, "/test.txt")
+data, _ := io.ReadAll(r)
+r.Close()
+```
+
+### Local Mount
+
+Local filesystem access with offset-based I/O:
+
+```go
+import "github.com/mwantia/vfs/mounts"
+
+local := mounts.NewLocal("/tmp/vfs-root")
+fs.Mount(ctx, "/local", local)
 ```
 
 ### ReadOnly Wrapper
@@ -175,9 +302,11 @@ fs.Mount("/", mem)
 Wraps any mount to make it read-only:
 
 ```go
-mount := &MyMount{}
+mount := mounts.NewMemory()
 readOnly := mounts.NewReadOnly(mount)
-fs.Mount("/readonly", readOnly)
+fs.Mount(ctx, "/readonly", readOnly)
+
+// Writes will fail with ErrReadOnly
 ```
 
 ## API Reference
@@ -186,25 +315,36 @@ fs.Mount("/readonly", readOnly)
 
 ```go
 // Mount management
-Mount(path string, mount VirtualMount, opts ...VirtualMountOption) error
-Unmount(path string) error
-Mounts() []VirtualMountInfo
+Mount(ctx context.Context, path string, mount VirtualMount, opts ...VirtualMountOption) error
+Unmount(ctx context.Context, path string) error
 
-// File operations
+// Streaming I/O (high-level)
+OpenRead(ctx context.Context, path string) (io.ReadCloser, error)
+OpenWrite(ctx context.Context, path string) (io.ReadWriteCloser, error)
+
+// Direct I/O (low-level)
+Read(ctx context.Context, path string, offset, size int64) ([]byte, error)
+Write(ctx context.Context, path string, offset int64, data []byte) (int64, error)
+
+// File/directory operations
 Stat(ctx context.Context, path string) (*VirtualFileInfo, error)
 ReadDir(ctx context.Context, path string) ([]*VirtualFileInfo, error)
-Open(ctx context.Context, path string) (io.ReadCloser, error)
-Create(ctx context.Context, path string) (io.WriteCloser, error)
-Remove(ctx context.Context, path string) error
-Mkdir(ctx context.Context, path string) error
-RemoveAll(ctx context.Context, path string) error
+MkDir(ctx context.Context, path string) error
+RmDir(ctx context.Context, path string) error
+Unlink(ctx context.Context, path string) error
+Rename(ctx context.Context, oldPath, newPath string) error
+Chmod(ctx context.Context, path string, mode VirtualFileMode) error
+
+// Advanced operations
+Lookup(ctx context.Context, path string) (bool, error)
+GetAttr(ctx context.Context, path string) (*VirtualObjectInfo, error)
+SetAttr(ctx context.Context, path string, info VirtualObjectInfo) (bool, error)
 ```
 
 ### Mount Options
 
 ```go
 vfs.WithReadOnly(true)        // Make mount read-only
-vfs.WithType("s3")           // Set mount type for metadata
 ```
 
 ### Standard Errors
@@ -219,11 +359,12 @@ vfs.ErrIsDirectory     // Expected file, got directory
 vfs.ErrNotDirectory    // Expected directory, got file
 vfs.ErrPermission      // Permission denied
 vfs.ErrReadOnly        // Read-only filesystem
+vfs.ErrClosed          // File already closed
 ```
 
 ## Examples
 
-### Example 1: S3 Backend
+### Example 1: S3 Backend with Streaming
 
 ```go
 type S3Mount struct {
@@ -231,16 +372,35 @@ type S3Mount struct {
     client *s3.Client
 }
 
-func (m *S3Mount) Stat(ctx context.Context, path string) (*vfs.VirtualFileInfo, error) {
-    obj, err := m.client.HeadObject(ctx, &s3.HeadObjectInput{
+func (m *S3Mount) Read(ctx context.Context, path string, offset int64, data []byte) (int, error) {
+    // Use S3 range reads for efficient streaming
+    rangeHeader := fmt.Sprintf("bytes=%d-%d", offset, offset+int64(len(data))-1)
+
+    result, err := m.client.GetObject(ctx, &s3.GetObjectInput{
         Bucket: &m.bucket,
         Key:    &path,
+        Range:  &rangeHeader,
     })
     if err != nil {
-        return nil, vfs.ErrNotExist
+        return 0, vfs.ErrNotExist
     }
+    defer result.Body.Close()
 
-    return vfs.NewFileInfo(path, *obj.ContentLength, 0644, *obj.LastModified, false), nil
+    return io.ReadFull(result.Body, data)
+}
+
+func (m *S3Mount) Write(ctx context.Context, path string, offset int64, data []byte) (int, error) {
+    // For simplicity, writes require uploading entire file
+    // Production implementation would use multipart uploads
+    _, err := m.client.PutObject(ctx, &s3.PutObjectInput{
+        Bucket: &m.bucket,
+        Key:    &path,
+        Body:   bytes.NewReader(data),
+    })
+    if err != nil {
+        return 0, err
+    }
+    return len(data), nil
 }
 
 // ... implement other methods
@@ -253,51 +413,82 @@ type DBMount struct {
     db *sql.DB
 }
 
-func (m *DBMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualFileInfo, error) {
-    rows, err := m.db.QueryContext(ctx,
-        "SELECT name, size, modified FROM files WHERE parent = ?", path)
+func (m *DBMount) Read(ctx context.Context, path string, offset int64, data []byte) (int, error) {
+    var content []byte
+    err := m.db.QueryRowContext(ctx,
+        "SELECT content FROM files WHERE path = ?", path).Scan(&content)
+    if err == sql.ErrNoRows {
+        return 0, vfs.ErrNotExist
+    }
     if err != nil {
-        return nil, err
-    }
-    defer rows.Close()
-
-    var infos []*vfs.VirtualFileInfo
-    for rows.Next() {
-        var name string
-        var size int64
-        var modTime time.Time
-        rows.Scan(&name, &size, &modTime)
-        infos = append(infos, vfs.NewFileInfo(name, size, 0644, modTime, false))
+        return 0, err
     }
 
-    return infos, nil
+    if offset >= int64(len(content)) {
+        return 0, io.EOF
+    }
+
+    n := copy(data, content[offset:])
+    return n, nil
+}
+
+func (m *DBMount) Write(ctx context.Context, path string, offset int64, data []byte) (int, error) {
+    // Read existing content
+    var content []byte
+    m.db.QueryRowContext(ctx, "SELECT content FROM files WHERE path = ?", path).Scan(&content)
+
+    // Extend if needed
+    newSize := offset + int64(len(data))
+    if newSize > int64(len(content)) {
+        newContent := make([]byte, newSize)
+        copy(newContent, content)
+        content = newContent
+    }
+
+    // Write at offset
+    copy(content[offset:], data)
+
+    // Update database
+    _, err := m.db.ExecContext(ctx,
+        "UPDATE files SET content = ?, size = ? WHERE path = ?",
+        content, len(content), path)
+
+    return len(data), err
 }
 
 // ... implement other methods
 ```
 
-### Example 3: Filter/Query-based Virtual Filesystem
+### Example 3: Streaming from HTTP Source
 
 ```go
-type FilterMount struct {
-    metadata MetadataStore
-    query    string
+type HTTPMount struct {
+    baseURL string
+    client  *http.Client
 }
 
-func (m *FilterMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualFileInfo, error) {
-    // Execute query to find matching files
-    files, err := m.metadata.Query(ctx, m.query)
+func (m *HTTPMount) Read(ctx context.Context, path string, offset int64, data []byte) (int, error) {
+    url := m.baseURL + path
+    req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
     if err != nil {
-        return nil, err
+        return 0, err
     }
 
-    // Convert to VirtualFileInfo
-    var infos []*vfs.VirtualFileInfo
-    for _, f := range files {
-        infos = append(infos, vfs.NewFileInfo(f.Name, f.Size, 0644, f.ModTime, false))
+    // Use HTTP range requests for efficient streaming
+    rangeHeader := fmt.Sprintf("bytes=%d-%d", offset, offset+int64(len(data))-1)
+    req.Header.Set("Range", rangeHeader)
+
+    resp, err := m.client.Do(req)
+    if err != nil {
+        return 0, err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode == http.StatusNotFound {
+        return 0, vfs.ErrNotExist
     }
 
-    return infos, nil
+    return io.ReadFull(resp.Body, data)
 }
 
 // ... implement other methods
@@ -316,44 +507,64 @@ func (m *FilterMount) ReadDir(ctx context.Context, path string) ([]*vfs.VirtualF
 ## Design Philosophy
 
 ### Simplicity
-- Small API surface (7 methods)
+- Small API surface (8 core methods)
 - No external dependencies
 - Easy to understand and implement
+
+### Efficiency
+- Offset-based I/O for streaming large files
+- No full-file buffering required
+- Direct support for partial reads/writes
+- Minimal memory allocations
 
 ### Flexibility
 - Not opinionated about storage
 - Works with any backend
 - Compose handlers for complex scenarios
+- Support for sparse files
 
 ### Safety
 - Thread-safe by default
 - Prevents accidental unmounting of busy mounts
 - Clear error types
+- Context-based cancellation
 
 ### Unix-like
 - Familiar mount metaphor
 - Longest-prefix matching
+- POSIX-like I/O semantics
 - Everything is a file
 
 ## Testing
 
 ```go
 func TestMyMount(t *testing.T) {
+    ctx := t.Context()
     fs := vfs.NewVfs()
-    mount := &MyMount{}
+    mount := mounts.NewMemory()
 
-    err := fs.Mount("/test", mount)
-    if err != nil {
+    if err := fs.Mount(ctx, "/test", mount); err != nil {
         t.Fatal(err)
     }
 
-    info, err := fs.Stat(context.Background(), "/test/file.txt")
+    // Write file
+    w, err := fs.OpenWrite(ctx, "/test/file.txt")
     if err != nil {
         t.Fatal(err)
     }
+    w.Write([]byte("test data"))
+    w.Close()
 
-    if info.Size() != 1024 {
-        t.Errorf("expected size 1024, got %d", info.Size())
+    // Read file
+    r, err := fs.OpenRead(ctx, "/test/file.txt")
+    if err != nil {
+        t.Fatal(err)
+    }
+    data, _ := io.ReadAll(r)
+    r.Close()
+
+    if string(data) != "test data" {
+        t.Errorf("expected 'test data', got %q", data)
     }
 }
 ```
