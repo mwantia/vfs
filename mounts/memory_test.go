@@ -19,7 +19,7 @@ func TestMemoryMount_FileOperations(t *testing.T) {
 	}
 
 	// Create and write file
-	w, err := fs.OpenWrite(ctx, "/test.txt")
+	w, err := fs.OpenWrite(ctx, "/test.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	if err != nil {
 		t.Fatalf("OpenWrite failed: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestMemoryMount_FileOperations(t *testing.T) {
 	}
 
 	// Read file
-	r, err := fs.OpenRead(ctx, "/test.txt")
+	r, err := fs.OpenRead(ctx, "/test.txt", vfs.AccessModeRead)
 	if err != nil {
 		t.Fatalf("OpenRead failed: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestMemoryMount_DirectoryOperations(t *testing.T) {
 
 	// Create files in directory
 	for i, name := range []string{"file1.txt", "file2.txt", "file3.txt"} {
-		w, err := fs.OpenWrite(ctx, "/data/"+name)
+		w, err := fs.OpenWrite(ctx, "/data/"+name, vfs.AccessModeWrite|vfs.AccessModeCreate)
 		if err != nil {
 			t.Fatalf("OpenWrite %s failed: %v", name, err)
 		}
@@ -124,7 +124,7 @@ func TestMemoryMount_NestedPaths(t *testing.T) {
 	}
 
 	// Create nested file
-	w, err := fs.OpenWrite(ctx, "/a/b/c/file.txt")
+	w, err := fs.OpenWrite(ctx, "/a/b/c/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	if err != nil {
 		t.Fatalf("OpenWrite nested file failed: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestMemoryMount_ErrorCases(t *testing.T) {
 	}
 
 	// OpenRead non-existent file
-	if _, err := fs.OpenRead(ctx, "/nonexistent"); err != vfs.ErrNotExist {
+	if _, err := fs.OpenRead(ctx, "/nonexistent", vfs.AccessModeRead); err != vfs.ErrNotExist {
 		t.Errorf("Expected ErrNotExist on OpenRead, got %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestMemoryMount_ErrorCases(t *testing.T) {
 	}
 
 	// Try to read directory
-	if _, err := fs.OpenRead(ctx, "/testdir"); err == nil {
+	if _, err := fs.OpenRead(ctx, "/testdir", vfs.AccessModeRead); err == nil {
 		t.Error("Expected error opening directory for reading")
 	}
 

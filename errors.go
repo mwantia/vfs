@@ -18,5 +18,7 @@ var (
 	ErrReadOnly     = errors.New("vfs: read-only filesystem")
 
 	// I/O errors
-	ErrClosed = errors.New("vfs: file already closed")
+	ErrClosed  = errors.New("vfs: file already closed")
+	ErrInvalid = errors.New("vfs: invalid argument")
+	ErrInUse   = errors.New("vfs: file already in use")
 )

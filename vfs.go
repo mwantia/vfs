@@ -11,8 +11,9 @@ import (
 // file operations to the appropriate mount handlers. It provides a Unix-like filesystem
 // abstraction with support for nested mounts and thread-safe operations.
 type VirtualFileSystem struct {
-	mu     sync.RWMutex
-	mounts map[string]*VirtualFileSystemEntry
+	mu      sync.RWMutex
+	mounts  map[string]*VirtualFileSystemEntry
+	streams map[string]io.Closer // Active streams keyed by absolute path
 }
 
 // VirtualFileSystemEntry represents a single mount point with its handler and metadata.
@@ -24,17 +25,27 @@ type VirtualFileSystemEntry struct {
 // NewVfs creates a new VirtualFileSystem instance with no initial mounts.
 func NewVfs() *VirtualFileSystem {
 	return &VirtualFileSystem{
-		mounts: make(map[string]*VirtualFileSystemEntry),
+		mounts:  make(map[string]*VirtualFileSystemEntry),
+		streams: make(map[string]io.Closer),
 	}
 }
 
-func (vfs *VirtualFileSystem) OpenRead(ctx context.Context, path string) (io.ReadCloser, error) {
+// OpenRead opens a file for reading and returns a reader.
+// The returned VirtualReader must be closed by the caller.
+func (vfs *VirtualFileSystem) OpenRead(ctx context.Context, path string, flags VirtualAccessMode) (VirtualReader, error) {
+	// Check if file is already open
+	vfs.mu.RLock()
+	if _, exists := vfs.streams[path]; exists {
+		vfs.mu.RUnlock()
+		return nil, ErrInUse
+	}
+	vfs.mu.RUnlock()
+
 	mount, relPath, err := vfs.resolveMountAndPath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Verify file exists and is not a directory
 	info, err := mount.Stat(ctx, relPath)
 	if err != nil {
 		return nil, err
@@ -44,32 +55,98 @@ func (vfs *VirtualFileSystem) OpenRead(ctx context.Context, path string) (io.Rea
 		return nil, ErrIsDirectory
 	}
 
-	return NewVirtualReadCloser(ctx, mount, relPath), nil
+	stream := &virtualReaderImpl{
+		vfs:     vfs,
+		mount:   mount,
+		path:    relPath, // Relative path for mount operations
+		absPath: path,    // Absolute path for stream tracking
+		offset:  0,
+		ctx:     ctx,
+		closed:  false,
+	}
+
+	// Register stream with absolute path as key
+	vfs.mu.Lock()
+	vfs.streams[path] = stream
+	vfs.mu.Unlock()
+
+	return stream, nil
 }
 
-func (vfs *VirtualFileSystem) OpenWrite(ctx context.Context, path string) (io.ReadWriteCloser, error) {
+// OpenWrite opens a file for writing and returns a reader/writer.
+// The returned VirtualReadWriter must be closed by the caller.
+func (vfs *VirtualFileSystem) OpenWrite(ctx context.Context, path string, flags VirtualAccessMode) (VirtualReadWriter, error) {
+	// Check if file is already open
+	vfs.mu.RLock()
+	if _, exists := vfs.streams[path]; exists {
+		vfs.mu.RUnlock()
+		return nil, ErrInUse
+	}
+	vfs.mu.RUnlock()
+
 	mount, relPath, err := vfs.resolveMountAndPath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if file exists, create if it doesn't
-	_, err = mount.Stat(ctx, relPath)
-	if err == ErrNotExist {
-		// Create the file
-		if err := mount.Create(ctx, relPath, false); err != nil {
+	info, err := mount.Stat(ctx, relPath)
+	if err != nil {
+		if err == ErrNotExist {
+			// Create file if it doesn't exist and CREATE flag is set
+			if flags.HasCreate() {
+				if err := mount.Create(ctx, relPath, false); err != nil {
+					return nil, err
+				}
+				// Refresh info after creation
+				info, err = mount.Stat(ctx, relPath)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				return nil, err
+			}
+		} else {
 			return nil, err
 		}
-	} else if err != nil {
-		return nil, err
 	} else {
-		// File exists - truncate it
+		// File exists - check EXCL flag
+		if flags.HasExcl() && flags.HasCreate() {
+			return nil, ErrExist
+		}
+
+		if info.Type == ObjectTypeDirectory {
+			return nil, ErrIsDirectory
+		}
+	}
+
+	// Determine initial offset
+	offset := int64(0)
+	if flags.HasAppend() {
+		// For append mode, get current file size
+		offset = info.Size
+	} else if flags.HasTrunc() {
+		// Only truncate if TRUNC flag is explicitly set
 		if err := mount.Truncate(ctx, relPath, 0); err != nil {
 			return nil, err
 		}
 	}
 
-	return NewVirtualReadWriteCloser(ctx, mount, relPath), nil
+	stream := &virtualWriterImpl{
+		vfs:     vfs,
+		mount:   mount,
+		path:    relPath, // Relative path for mount operations
+		absPath: path,    // Absolute path for stream tracking
+		offset:  offset,
+		ctx:     ctx,
+		closed:  false,
+	}
+
+	// Register stream with absolute path as key
+	vfs.mu.Lock()
+	vfs.streams[path] = stream
+	vfs.mu.Unlock()
+
+	return stream, nil
 }
 
 func (vfs *VirtualFileSystem) Read(ctx context.Context, path string, offset, size int64) ([]byte, error) {
@@ -98,8 +175,15 @@ func (vfs *VirtualFileSystem) Write(ctx context.Context, path string, offset int
 }
 
 func (vfs *VirtualFileSystem) Close(ctx context.Context, path string) error {
-	// No-op: Close is handled by stream closers, not by filesystem
-	return nil
+	vfs.mu.Lock()
+	stream, exists := vfs.streams[path]
+	vfs.mu.Unlock()
+
+	if !exists {
+		return nil // No stream open for this path
+	}
+
+	return stream.Close()
 }
 
 func (vfs *VirtualFileSystem) MkDir(ctx context.Context, path string) error {
@@ -243,6 +327,26 @@ func (vfs *VirtualFileSystem) Unmount(ctx context.Context, path string) error {
 
 	delete(vfs.mounts, path)
 	return nil
+}
+
+// Cleanup closes all currently open streams in the VFS.
+// Returns the first error encountered, but continues closing all streams.
+func (vfs *VirtualFileSystem) Cleanup() error {
+	vfs.mu.Lock()
+	streams := make([]io.Closer, 0, len(vfs.streams))
+	for _, stream := range vfs.streams {
+		streams = append(streams, stream)
+	}
+	vfs.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	return firstErr
 }
 
 func (vfs *VirtualFileSystem) Lookup(ctx context.Context, path string) (bool, error) {

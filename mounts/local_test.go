@@ -24,7 +24,7 @@ func TestLocalMount_FileOperations(t *testing.T) {
 	}
 
 	// Create and write file
-	w, err := fs.OpenWrite(ctx, "/test.txt")
+	w, err := fs.OpenWrite(ctx, "/test.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	if err != nil {
 		t.Fatalf("OpenWrite failed: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestLocalMount_FileOperations(t *testing.T) {
 	}
 
 	// Read file via VFS
-	r, err := fs.OpenRead(ctx, "/test.txt")
+	r, err := fs.OpenRead(ctx, "/test.txt", vfs.AccessModeRead)
 	if err != nil {
 		t.Fatalf("OpenRead failed: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestLocalMount_DirectoryOperations(t *testing.T) {
 
 	// Create files in directory
 	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
-		w, err := fs.OpenWrite(ctx, "/mydir/"+name)
+		w, err := fs.OpenWrite(ctx, "/mydir/"+name, vfs.AccessModeWrite|vfs.AccessModeCreate)
 		if err != nil {
 			t.Fatalf("OpenWrite %s failed: %v", name, err)
 		}
@@ -143,23 +143,23 @@ func TestLocalMount_ExistingFiles(t *testing.T) {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	r, err := fs.OpenRead(ctx, "/existing.txt")
+	r, err := fs.OpenRead(ctx, "/existing.txt", vfs.AccessModeRead)
 	if err != nil {
 		t.Fatalf("OpenRead existing file failed: %v", err)
 	}
-	defer r.Close()
 
 	data, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("ReadAll failed: %v", err)
 	}
+	r.Close() // Close before opening for write
 
 	if string(data) != "pre-existing" {
 		t.Errorf("Expected 'pre-existing', got %q", data)
 	}
 
 	// Update file via VFS
-	w, err := fs.OpenWrite(ctx, "/existing.txt")
+	w, err := fs.OpenWrite(ctx, "/existing.txt", vfs.AccessModeWrite|vfs.AccessModeTrunc)
 	if err != nil {
 		t.Fatalf("OpenWrite for update failed: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestLocalMount_ErrorCases(t *testing.T) {
 	}
 
 	// OpenRead non-existent file
-	if _, err := fs.OpenRead(ctx, "/nonexistent"); err != vfs.ErrNotExist {
+	if _, err := fs.OpenRead(ctx, "/nonexistent", vfs.AccessModeRead); err != vfs.ErrNotExist {
 		t.Errorf("Expected ErrNotExist, got %v", err)
 	}
 
@@ -198,7 +198,7 @@ func TestLocalMount_ErrorCases(t *testing.T) {
 	}
 
 	// Try to read directory
-	if _, err := fs.OpenRead(ctx, "/dir"); err == nil {
+	if _, err := fs.OpenRead(ctx, "/dir", vfs.AccessModeRead); err == nil {
 		t.Error("Expected error opening directory for reading")
 	}
 

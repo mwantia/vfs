@@ -20,12 +20,12 @@ func TestReadOnlyMount_ReadOperations(t *testing.T) {
 	}
 
 	// Populate with data
-	w, _ := fs.OpenWrite(ctx, "/file.txt")
+	w, _ := fs.OpenWrite(ctx, "/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	w.Write([]byte("readonly test"))
 	w.Close()
 
 	fs.MkDir(ctx, "/dir")
-	w, _ = fs.OpenWrite(ctx, "/dir/nested.txt")
+	w, _ = fs.OpenWrite(ctx, "/dir/nested.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	w.Write([]byte("nested"))
 	w.Close()
 
@@ -45,7 +45,7 @@ func TestReadOnlyMount_ReadOperations(t *testing.T) {
 	}
 
 	// OpenRead should work
-	r, err := fs.OpenRead(ctx, "/file.txt")
+	r, err := fs.OpenRead(ctx, "/file.txt", vfs.AccessModeRead)
 	if err != nil {
 		t.Fatalf("OpenRead failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestReadOnlyMount_WriteOperationsFail(t *testing.T) {
 	}
 
 	// OpenWrite should fail due to Create failing on readonly mount
-	_, err := fs.OpenWrite(ctx, "/test.txt")
+	_, err := fs.OpenWrite(ctx, "/test.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	if err != vfs.ErrReadOnly {
 		t.Errorf("Expected ErrReadOnly on OpenWrite, got %v", err)
 	}
@@ -97,7 +97,7 @@ func TestReadOnlyMount_DeleteOperationsFail(t *testing.T) {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	w, _ := fs.OpenWrite(ctx, "/file.txt")
+	w, _ := fs.OpenWrite(ctx, "/file.txt", vfs.AccessModeWrite|vfs.AccessModeCreate)
 	w.Write([]byte("test"))
 	w.Close()
 

@@ -2,21 +2,12 @@ package vfs
 
 import (
 	"context"
-	"io"
 )
 
 // VirtualOperations defines the interface for advanced VFS operations.
 // This interface extends the basic VFS functionality with additional file system operations
 // such as random access I/O, attribute management, and extended file operations.
 type VirtualOperations interface {
-	// OpenRead opens a file for reading and returns a reader.
-	// The returned ReadCloser must be closed by the caller.
-	OpenRead(ctx context.Context, path string) (io.ReadCloser, error)
-
-	// OpenWrite opens a file for writing and returns a reader/writer.
-	// The returned ReadWriteCloser must be closed by the caller.
-	OpenWrite(ctx context.Context, path string) (io.ReadWriteCloser, error)
-
 	// Read reads size bytes from the file at path starting at offset.
 	// Returns the data read or an error if the operation fails.
 	Read(ctx context.Context, path string, offset, size int64) ([]byte, error)

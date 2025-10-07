@@ -1,27 +1,8 @@
 package vfs
 
 import (
-	"path"
 	"strings"
 )
-
-// cleanPath normalizes a path for use in the VFS.
-// It removes leading/trailing slashes, resolves . and ..,
-// and removes duplicate slashes.
-func cleanPath(p string) string {
-	// Use path.Clean to normalize
-	cleaned := path.Clean(p)
-
-	// Remove leading slash to make it relative
-	cleaned = strings.TrimPrefix(cleaned, "/")
-
-	// Handle root path
-	if cleaned == "." {
-		return ""
-	}
-
-	return cleaned
-}
 
 // hasPrefix checks if path has the given prefix.
 // Both paths should be cleaned before calling.
