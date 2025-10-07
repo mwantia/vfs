@@ -1,36 +1,37 @@
 package mounts
 
 import (
-	"context"
 	"io"
 	"testing"
 
 	"github.com/mwantia/vfs"
 )
 
+// TestReadOnlyMount_ReadOperations verifies that read operations work correctly
+// on a read-only wrapped mount.
 func TestReadOnlyMount_ReadOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
 	// Create memory mount with some data
 	mem := NewMemory()
-	if err := fs.Mount("/", mem); err != nil {
+	if err := fs.Mount(ctx, "/", mem); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
 	// Populate with data
-	w, _ := fs.Create(ctx, "/file.txt")
+	w, _ := fs.OpenWrite(ctx, "/file.txt")
 	w.Write([]byte("readonly test"))
 	w.Close()
 
-	fs.Mkdir(ctx, "/dir")
-	w, _ = fs.Create(ctx, "/dir/nested.txt")
+	fs.MkDir(ctx, "/dir")
+	w, _ = fs.OpenWrite(ctx, "/dir/nested.txt")
 	w.Write([]byte("nested"))
 	w.Close()
 
 	// Unmount and remount as readonly
-	fs.Unmount("/")
-	if err := fs.Mount("/", NewReadOnly(mem)); err != nil {
+	fs.Unmount(ctx, "/")
+	if err := fs.Mount(ctx, "/", NewReadOnly(mem)); err != nil {
 		t.Fatalf("Mount readonly failed: %v", err)
 	}
 
@@ -43,10 +44,10 @@ func TestReadOnlyMount_ReadOperations(t *testing.T) {
 		t.Error("Expected file, got directory")
 	}
 
-	// Open should work
-	r, err := fs.Open(ctx, "/file.txt")
+	// OpenRead should work
+	r, err := fs.OpenRead(ctx, "/file.txt")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf("OpenRead failed: %v", err)
 	}
 	defer r.Close()
 
@@ -66,62 +67,56 @@ func TestReadOnlyMount_ReadOperations(t *testing.T) {
 }
 
 func TestReadOnlyMount_WriteOperationsFail(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
 	mem := NewMemory()
-	if err := fs.Mount("/", NewReadOnly(mem)); err != nil {
+	if err := fs.Mount(ctx, "/", NewReadOnly(mem)); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	// Create returns a writer, but it should fail on Close
-	w, err := fs.Create(ctx, "/test.txt")
-	if err != nil {
-		t.Fatalf("Create returned error: %v", err)
+	// OpenWrite should fail due to Create failing on readonly mount
+	_, err := fs.OpenWrite(ctx, "/test.txt")
+	if err != vfs.ErrReadOnly {
+		t.Errorf("Expected ErrReadOnly on OpenWrite, got %v", err)
 	}
 
-	// Write and close should fail
-	w.Write([]byte("test"))
-	if err := w.Close(); err != vfs.ErrReadOnly {
-		t.Errorf("Expected ErrReadOnly on Close, got %v", err)
-	}
-
-	// Mkdir should fail
-	if err := fs.Mkdir(ctx, "/dir"); err != vfs.ErrReadOnly {
-		t.Errorf("Expected ErrReadOnly on Mkdir, got %v", err)
+	// MkDir should fail
+	if err := fs.MkDir(ctx, "/dir"); err != vfs.ErrReadOnly {
+		t.Errorf("Expected ErrReadOnly on MkDir, got %v", err)
 	}
 }
 
 func TestReadOnlyMount_DeleteOperationsFail(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
 	// Create memory mount with data
 	mem := NewMemory()
-	if err := fs.Mount("/", mem); err != nil {
+	if err := fs.Mount(ctx, "/", mem); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	w, _ := fs.Create(ctx, "/file.txt")
+	w, _ := fs.OpenWrite(ctx, "/file.txt")
 	w.Write([]byte("test"))
 	w.Close()
 
-	fs.Mkdir(ctx, "/dir")
+	fs.MkDir(ctx, "/dir")
 
 	// Remount as readonly
-	fs.Unmount("/")
-	if err := fs.Mount("/", NewReadOnly(mem)); err != nil {
+	fs.Unmount(ctx, "/")
+	if err := fs.Mount(ctx, "/", NewReadOnly(mem)); err != nil {
 		t.Fatalf("Mount readonly failed: %v", err)
 	}
 
-	// Remove should fail
-	if err := fs.Remove(ctx, "/file.txt"); err != vfs.ErrReadOnly {
-		t.Errorf("Expected ErrReadOnly on Remove, got %v", err)
+	// Unlink should fail
+	if err := fs.Unlink(ctx, "/file.txt"); err != vfs.ErrReadOnly {
+		t.Errorf("Expected ErrReadOnly on Unlink, got %v", err)
 	}
 
-	// RemoveAll should fail
-	if err := fs.RemoveAll(ctx, "/dir"); err != vfs.ErrReadOnly {
-		t.Errorf("Expected ErrReadOnly on RemoveAll, got %v", err)
+	// RmDir should fail
+	if err := fs.RmDir(ctx, "/dir"); err != vfs.ErrReadOnly {
+		t.Errorf("Expected ErrReadOnly on RmDir, got %v", err)
 	}
 
 	// Verify files still exist

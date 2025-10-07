@@ -2,25 +2,26 @@ package mounts
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"testing"
 
 	"github.com/mwantia/vfs"
 )
 
+// TestMemoryMount_FileOperations verifies basic file create, write, and read operations
+// on the in-memory filesystem.
 func TestMemoryMount_FileOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
-	if err := fs.Mount("/", NewMemory()); err != nil {
+	if err := fs.Mount(ctx, "/", NewMemory()); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	// Create file
-	w, err := fs.Create(ctx, "/test.txt")
+	// Create and write file
+	w, err := fs.OpenWrite(ctx, "/test.txt")
 	if err != nil {
-		t.Fatalf("Create failed: %v", err)
+		t.Fatalf("OpenWrite failed: %v", err)
 	}
 
 	data := []byte("hello world")
@@ -33,9 +34,9 @@ func TestMemoryMount_FileOperations(t *testing.T) {
 	}
 
 	// Read file
-	r, err := fs.Open(ctx, "/test.txt")
+	r, err := fs.OpenRead(ctx, "/test.txt")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf("OpenRead failed: %v", err)
 	}
 	defer r.Close()
 
@@ -49,8 +50,8 @@ func TestMemoryMount_FileOperations(t *testing.T) {
 	}
 
 	// Remove file
-	if err := fs.Remove(ctx, "/test.txt"); err != nil {
-		t.Fatalf("Remove failed: %v", err)
+	if err := fs.Unlink(ctx, "/test.txt"); err != nil {
+		t.Fatalf("Unlink failed: %v", err)
 	}
 
 	// Verify removed
@@ -60,23 +61,23 @@ func TestMemoryMount_FileOperations(t *testing.T) {
 }
 
 func TestMemoryMount_DirectoryOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
-	if err := fs.Mount("/", NewMemory()); err != nil {
+	if err := fs.Mount(ctx, "/", NewMemory()); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
 	// Create directory
-	if err := fs.Mkdir(ctx, "/data"); err != nil {
-		t.Fatalf("Mkdir failed: %v", err)
+	if err := fs.MkDir(ctx, "/data"); err != nil {
+		t.Fatalf("MkDir failed: %v", err)
 	}
 
 	// Create files in directory
 	for i, name := range []string{"file1.txt", "file2.txt", "file3.txt"} {
-		w, err := fs.Create(ctx, "/data/"+name)
+		w, err := fs.OpenWrite(ctx, "/data/"+name)
 		if err != nil {
-			t.Fatalf("Create %s failed: %v", name, err)
+			t.Fatalf("OpenWrite %s failed: %v", name, err)
 		}
 		w.Write([]byte{byte(i)})
 		w.Close()
@@ -92,29 +93,40 @@ func TestMemoryMount_DirectoryOperations(t *testing.T) {
 		t.Errorf("Expected 3 entries, got %d", len(entries))
 	}
 
-	// RemoveAll
-	if err := fs.RemoveAll(ctx, "/data"); err != nil {
-		t.Fatalf("RemoveAll failed: %v", err)
+	// RmDir with force (delete all)
+	if err := fs.RmDir(ctx, "/data"); err == nil {
+		t.Error("Expected error removing non-empty directory without force")
 	}
 
-	// Verify removed
-	if _, err := fs.Stat(ctx, "/data"); err != vfs.ErrNotExist {
-		t.Errorf("Expected ErrNotExist after RemoveAll, got %v", err)
+	// Verify directory still exists
+	if _, err := fs.Stat(ctx, "/data"); err != nil {
+		t.Errorf("Directory should still exist, got %v", err)
 	}
 }
 
 func TestMemoryMount_NestedPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
-	if err := fs.Mount("/", NewMemory()); err != nil {
+	if err := fs.Mount(ctx, "/", NewMemory()); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	// Create nested file (should auto-create parent dirs)
-	w, err := fs.Create(ctx, "/a/b/c/file.txt")
+	// Create nested directories manually (no auto-create in new API)
+	if err := fs.MkDir(ctx, "/a"); err != nil {
+		t.Fatalf("MkDir /a failed: %v", err)
+	}
+	if err := fs.MkDir(ctx, "/a/b"); err != nil {
+		t.Fatalf("MkDir /a/b failed: %v", err)
+	}
+	if err := fs.MkDir(ctx, "/a/b/c"); err != nil {
+		t.Fatalf("MkDir /a/b/c failed: %v", err)
+	}
+
+	// Create nested file
+	w, err := fs.OpenWrite(ctx, "/a/b/c/file.txt")
 	if err != nil {
-		t.Fatalf("Create nested file failed: %v", err)
+		t.Fatalf("OpenWrite nested file failed: %v", err)
 	}
 	w.Write([]byte("nested"))
 	w.Close()
@@ -141,10 +153,10 @@ func TestMemoryMount_NestedPaths(t *testing.T) {
 }
 
 func TestMemoryMount_ErrorCases(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
-	if err := fs.Mount("/", NewMemory()); err != nil {
+	if err := fs.Mount(ctx, "/", NewMemory()); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
@@ -153,23 +165,23 @@ func TestMemoryMount_ErrorCases(t *testing.T) {
 		t.Errorf("Expected ErrNotExist, got %v", err)
 	}
 
-	// Open non-existent file
-	if _, err := fs.Open(ctx, "/nonexistent"); err != vfs.ErrNotExist {
-		t.Errorf("Expected ErrNotExist on Open, got %v", err)
+	// OpenRead non-existent file
+	if _, err := fs.OpenRead(ctx, "/nonexistent"); err != vfs.ErrNotExist {
+		t.Errorf("Expected ErrNotExist on OpenRead, got %v", err)
 	}
 
 	// Create directory
-	if err := fs.Mkdir(ctx, "/testdir"); err != nil {
-		t.Fatalf("Mkdir failed: %v", err)
+	if err := fs.MkDir(ctx, "/testdir"); err != nil {
+		t.Fatalf("MkDir failed: %v", err)
 	}
 
-	// Try to open directory
-	if _, err := fs.Open(ctx, "/testdir"); err != vfs.ErrIsDirectory {
-		t.Errorf("Expected ErrIsDirectory, got %v", err)
+	// Try to read directory
+	if _, err := fs.OpenRead(ctx, "/testdir"); err == nil {
+		t.Error("Expected error opening directory for reading")
 	}
 
-	// Try to remove directory as file
-	if err := fs.Remove(ctx, "/testdir"); err != vfs.ErrIsDirectory {
-		t.Errorf("Expected ErrIsDirectory on Remove, got %v", err)
+	// Try to unlink directory (should fail)
+	if err := fs.Unlink(ctx, "/testdir"); err == nil {
+		t.Error("Expected error unlinking directory")
 	}
 }

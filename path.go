@@ -37,7 +37,7 @@ func hasPrefix(path, prefix string) bool {
 	}
 
 	// Check if path starts with prefix followed by /
-	return strings.HasPrefix(path, prefix+"/")
+	return strings.HasPrefix(path, prefix)
 }
 
 // trimPrefix removes the prefix from path.

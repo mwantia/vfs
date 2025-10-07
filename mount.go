@@ -2,7 +2,6 @@ package vfs
 
 import (
 	"context"
-	"io"
 	"time"
 )
 
@@ -10,7 +9,7 @@ import (
 // Implementations provide access to a specific storage backend.
 // All paths passed to Mount methods are relative to the mount point.
 type VirtualMount interface {
-	// Geturns a list of supported capabilities for this mount
+	// GetCapabilities returns a list of supported capabilities for this mount.
 	GetCapabilities() VirtualMountCapabilities
 
 	// Stat returns information about a virtual object.
@@ -18,78 +17,53 @@ type VirtualMount interface {
 	Stat(ctx context.Context, path string) (*VirtualObjectInfo, error)
 
 	// List returns all virtual objects under the given path.
-	// For files, returns single entry. For directory, returns children.
+	// For directories, returns all direct children.
+	// For files, returns single entry with the file's info.
+	// Returns ErrNotExist if the path doesn't exist.
 	List(ctx context.Context, path string) ([]*VirtualObjectInfo, error)
 
-	// Get retrieves a virtual object and its metadata information.
-	Get(ctx context.Context, path string) (*VirtualObject, error)
+	// Read reads up to len(data) bytes from the object at path starting at offset.
+	// Returns the number of bytes read and any error encountered.
+	// Returns ErrNotExist if the path doesn't exist.
+	// Returns ErrIsDirectory if the path is a directory.
+	// If offset is beyond the file size, returns 0, io.EOF.
+	Read(ctx context.Context, path string, offset int64, data []byte) (int, error)
 
-	// Create will create a new virtual object.
-	// Returns ErrExist if the path already exist.
-	Create(ctx context.Context, path string, obj *VirtualObject) error
+	// Write writes data to the object at path starting at offset.
+	// If offset is beyond current file size, the gap is filled with zeros.
+	// Returns the number of bytes written and any error encountered.
+	// Returns ErrNotExist if the path doesn't exist (use Create first).
+	// Returns ErrIsDirectory if the path is a directory.
+	Write(ctx context.Context, path string, offset int64, data []byte) (int, error)
 
-	// Update will update an existing virtual object.
-	// Returns false (no error), if the path doesn't exist.
-	Update(ctx context.Context, path string, obj *VirtualObject) (bool, error)
+	// Create creates a new file or directory at the given path.
+	// For files, isDir should be false. For directories, isDir should be true.
+	// Returns ErrExist if the path already exists.
+	// Parent directories are NOT created automatically - they must exist.
+	Create(ctx context.Context, path string, isDir bool) error
 
-	// Delete removes an virtual object.
-	// If force is true and object is directory, removes all children.
-	Delete(ctx context.Context, path string, force bool) (bool, error)
+	// Delete removes the object at the given path.
+	// If force is true and the object is a directory, removes all children recursively.
+	// If force is false and the directory is not empty, returns an error.
+	// Returns ErrNotExist if the path doesn't exist.
+	Delete(ctx context.Context, path string, force bool) error
 
-	// Upsert either creates or updates a virtual object.
-	// It uses Stat to determine if the virtual object already exists or not.
-	Upsert(ctx context.Context, path string, source any) error
+	// Truncate changes the size of the file at path.
+	// If the file is larger than size, the extra data is discarded.
+	// If the file is smaller than size, it is extended with zero bytes.
+	// Returns ErrNotExist if the path doesn't exist.
+	// Returns ErrIsDirectory if the path is a directory.
+	Truncate(ctx context.Context, path string, size int64) error
 }
 
-// Mount represents a mounted filesystem handler.
-// Implementations provide access to a specific storage backend.
-// All paths passed to Mount methods are relative to the mount point.
-type OldVirtualMount interface {
-	// Stat returns information about a file or directory.
-	// Returns ErrNotExist if the path does not exist.
-	Stat(ctx context.Context, path string) (*VirtualFileInfo, error)
-
-	// ReadDir lists directory contents.
-	// Returns a slice of FileInfo for each entry in the directory.
-	// Returns ErrNotExist if the directory does not exist.
-	// Returns ErrNotDirectory if the path is not a directory.
-	ReadDir(ctx context.Context, path string) ([]*VirtualFileInfo, error)
-
-	// Open opens a file for reading.
-	// Returns ErrNotExist if the file does not exist.
-	// Returns ErrIsDirectory if the path is a directory.
-	Open(ctx context.Context, path string) (io.ReadCloser, error)
-
-	// Create creates a new file for writing.
-	// If the file already exists, it is truncated.
-	// Returns ErrReadOnly if the mount is read-only.
-	Create(ctx context.Context, path string) (io.WriteCloser, error)
-
-	// Remove deletes a file.
-	// Returns ErrNotExist if the file does not exist.
-	// Returns ErrIsDirectory if the path is a directory.
-	// Returns ErrReadOnly if the mount is read-only.
-	Remove(ctx context.Context, path string) error
-
-	// Mkdir creates a directory.
-	// Returns ErrExist if the directory already exists.
-	// Returns ErrReadOnly if the mount is read-only.
-	Mkdir(ctx context.Context, path string) error
-
-	// RemoveAll removes a directory and all its contents.
-	// Returns ErrNotExist if the path does not exist.
-	// Returns ErrReadOnly if the mount is read-only.
-	RemoveAll(ctx context.Context, path string) error
-}
-
-// MountInfo provides metadata about a mounted filesystem.
+// VirtualMountInfo provides metadata about a mounted filesystem.
 type VirtualMountInfo struct {
 	Path      string    // Mount point path (e.g., "/data")
 	ReadOnly  bool      // Whether the mount is read-only
 	MountedAt time.Time // When the mount was created
 }
 
-// MountOption configures mount behavior.
+// VirtualMountOption configures mount behavior.
 type VirtualMountOption func(*VirtualMountInfo)
 
 // WithReadOnly sets whether the mount is read-only.

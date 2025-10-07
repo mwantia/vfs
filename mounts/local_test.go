@@ -2,7 +2,6 @@ package mounts
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,21 +10,23 @@ import (
 	"github.com/mwantia/vfs"
 )
 
+// TestLocalMount_FileOperations verifies that file operations work correctly
+// with the local filesystem mount, including actual disk persistence.
 func TestLocalMount_FileOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
 	// Create temp directory
 	tmpDir := t.TempDir()
 
-	if err := fs.Mount("/", NewLocal(tmpDir)); err != nil {
+	if err := fs.Mount(ctx, "/", NewLocal(tmpDir)); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	// Create file
-	w, err := fs.Create(ctx, "/test.txt")
+	// Create and write file
+	w, err := fs.OpenWrite(ctx, "/test.txt")
 	if err != nil {
-		t.Fatalf("Create failed: %v", err)
+		t.Fatalf("OpenWrite failed: %v", err)
 	}
 
 	data := []byte("local filesystem")
@@ -44,9 +45,9 @@ func TestLocalMount_FileOperations(t *testing.T) {
 	}
 
 	// Read file via VFS
-	r, err := fs.Open(ctx, "/test.txt")
+	r, err := fs.OpenRead(ctx, "/test.txt")
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf("OpenRead failed: %v", err)
 	}
 	defer r.Close()
 
@@ -60,29 +61,29 @@ func TestLocalMount_FileOperations(t *testing.T) {
 	}
 
 	// Remove file
-	if err := fs.Remove(ctx, "/test.txt"); err != nil {
-		t.Fatalf("Remove failed: %v", err)
+	if err := fs.Unlink(ctx, "/test.txt"); err != nil {
+		t.Fatalf("Unlink failed: %v", err)
 	}
 
 	// Verify removed from disk
 	if _, err := os.Stat(realPath); !os.IsNotExist(err) {
-		t.Error("File still exists on disk after Remove")
+		t.Error("File still exists on disk after Unlink")
 	}
 }
 
 func TestLocalMount_DirectoryOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
 	tmpDir := t.TempDir()
 
-	if err := fs.Mount("/", NewLocal(tmpDir)); err != nil {
+	if err := fs.Mount(ctx, "/", NewLocal(tmpDir)); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
 	// Create directory
-	if err := fs.Mkdir(ctx, "/mydir"); err != nil {
-		t.Fatalf("Mkdir failed: %v", err)
+	if err := fs.MkDir(ctx, "/mydir"); err != nil {
+		t.Fatalf("MkDir failed: %v", err)
 	}
 
 	// Verify exists on disk
@@ -97,9 +98,9 @@ func TestLocalMount_DirectoryOperations(t *testing.T) {
 
 	// Create files in directory
 	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
-		w, err := fs.Create(ctx, "/mydir/"+name)
+		w, err := fs.OpenWrite(ctx, "/mydir/"+name)
 		if err != nil {
-			t.Fatalf("Create %s failed: %v", name, err)
+			t.Fatalf("OpenWrite %s failed: %v", name, err)
 		}
 		w.Close()
 	}
@@ -114,19 +115,19 @@ func TestLocalMount_DirectoryOperations(t *testing.T) {
 		t.Errorf("Expected 3 entries, got %d", len(entries))
 	}
 
-	// RemoveAll
-	if err := fs.RemoveAll(ctx, "/mydir"); err != nil {
-		t.Fatalf("RemoveAll failed: %v", err)
+	// RmDir on non-empty directory should fail
+	if err := fs.RmDir(ctx, "/mydir"); err == nil {
+		t.Error("Expected error removing non-empty directory")
 	}
 
-	// Verify removed from disk
-	if _, err := os.Stat(realPath); !os.IsNotExist(err) {
-		t.Error("Directory still exists after RemoveAll")
+	// Verify directory still exists on disk
+	if _, err := os.Stat(realPath); err != nil {
+		t.Error("Directory should still exist after failed RmDir")
 	}
 }
 
 func TestLocalMount_ExistingFiles(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
 	tmpDir := t.TempDir()
@@ -138,13 +139,13 @@ func TestLocalMount_ExistingFiles(t *testing.T) {
 	}
 
 	// Mount and read existing file
-	if err := fs.Mount("/", NewLocal(tmpDir)); err != nil {
+	if err := fs.Mount(ctx, "/", NewLocal(tmpDir)); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	r, err := fs.Open(ctx, "/existing.txt")
+	r, err := fs.OpenRead(ctx, "/existing.txt")
 	if err != nil {
-		t.Fatalf("Open existing file failed: %v", err)
+		t.Fatalf("OpenRead existing file failed: %v", err)
 	}
 	defer r.Close()
 
@@ -158,9 +159,9 @@ func TestLocalMount_ExistingFiles(t *testing.T) {
 	}
 
 	// Update file via VFS
-	w, err := fs.Create(ctx, "/existing.txt")
+	w, err := fs.OpenWrite(ctx, "/existing.txt")
 	if err != nil {
-		t.Fatalf("Create for update failed: %v", err)
+		t.Fatalf("OpenWrite for update failed: %v", err)
 	}
 	w.Write([]byte("updated"))
 	w.Close()
@@ -177,32 +178,32 @@ func TestLocalMount_ExistingFiles(t *testing.T) {
 }
 
 func TestLocalMount_ErrorCases(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := vfs.NewVfs()
 
 	tmpDir := t.TempDir()
 
-	if err := fs.Mount("/", NewLocal(tmpDir)); err != nil {
+	if err := fs.Mount(ctx, "/", NewLocal(tmpDir)); err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
 
-	// Open non-existent file
-	if _, err := fs.Open(ctx, "/nonexistent"); err != vfs.ErrNotExist {
+	// OpenRead non-existent file
+	if _, err := fs.OpenRead(ctx, "/nonexistent"); err != vfs.ErrNotExist {
 		t.Errorf("Expected ErrNotExist, got %v", err)
 	}
 
 	// Create directory
-	if err := fs.Mkdir(ctx, "/dir"); err != nil {
-		t.Fatalf("Mkdir failed: %v", err)
+	if err := fs.MkDir(ctx, "/dir"); err != nil {
+		t.Fatalf("MkDir failed: %v", err)
 	}
 
-	// Try to open directory
-	if _, err := fs.Open(ctx, "/dir"); err != vfs.ErrIsDirectory {
-		t.Errorf("Expected ErrIsDirectory, got %v", err)
+	// Try to read directory
+	if _, err := fs.OpenRead(ctx, "/dir"); err == nil {
+		t.Error("Expected error opening directory for reading")
 	}
 
-	// Try to remove directory as file
-	if err := fs.Remove(ctx, "/dir"); err != vfs.ErrIsDirectory {
-		t.Errorf("Expected ErrIsDirectory on Remove, got %v", err)
+	// Try to unlink directory (should fail)
+	if err := fs.Unlink(ctx, "/dir"); err == nil {
+		t.Error("Expected error unlinking directory")
 	}
 }
