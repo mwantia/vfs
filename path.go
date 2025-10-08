@@ -1,8 +1,38 @@
 package vfs
 
 import (
+	"fmt"
 	"strings"
 )
+
+// ToAbsolutePath ensures the path always starts with a leading slash.
+func ToAbsolutePath(path string) (string, error) {
+	if len(path) == 0 {
+		return "", ErrInvalidPath
+	}
+
+	if !strings.HasPrefix(path, "/") {
+		path = fmt.Sprintf("/%s", path)
+	}
+
+	return path, nil
+}
+
+// ToRelativePath removes the prefix from path.
+// Returns the relative path after the prefix.
+// It additionally removes any leading slashes.
+func ToRelativePath(path, prefix string) string {
+	if prefix == "" {
+		return path
+	}
+
+	if path == prefix {
+		return ""
+	}
+
+	relPath := strings.TrimPrefix(path, prefix)
+	return strings.TrimPrefix(relPath, "/")
+}
 
 // hasPrefix checks if path has the given prefix.
 // Both paths should be cleaned before calling.
@@ -19,22 +49,4 @@ func hasPrefix(path, prefix string) bool {
 
 	// Check if path starts with prefix followed by /
 	return strings.HasPrefix(path, prefix)
-}
-
-// trimPrefix removes the prefix from path.
-// Returns the relative path after the prefix.
-func trimPrefix(path, prefix string) string {
-	if prefix == "" {
-		return path
-	}
-
-	if path == prefix {
-		return ""
-	}
-
-	// Remove prefix and leading slash
-	rel := strings.TrimPrefix(path, prefix)
-	rel = strings.TrimPrefix(rel, "/")
-
-	return rel
 }

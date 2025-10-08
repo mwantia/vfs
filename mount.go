@@ -56,26 +56,53 @@ type VirtualMount interface {
 	Truncate(ctx context.Context, path string, size int64) error
 }
 
-// VirtualMountInfo provides metadata about a mounted filesystem.
-type VirtualMountInfo struct {
-	Path      string    // Mount point path (e.g., "/data")
-	ReadOnly  bool      // Whether the mount is read-only
-	MountedAt time.Time // When the mount was created
+// VirtualMountOptions provides metadata about a mounted filesystem.
+type VirtualMountOptions struct {
+	// Mount point path (e.g., "/data").
+	Path string
+
+	// When the mount was created.
+	MountTime time.Time
+
+	// Whether the mount is read-only.
+	ReadOnly bool
+
+	// Whether the mount allows for nested mountpoints.
+	DenyNesting bool
 }
 
 // VirtualMountOption configures mount behavior.
-type VirtualMountOption func(*VirtualMountInfo)
+type VirtualMountOption func(*VirtualMountOptions)
 
-// WithReadOnly sets whether the mount is read-only.
-func WithReadOnly(ro bool) VirtualMountOption {
-	return func(info *VirtualMountInfo) {
-		info.ReadOnly = ro
+// WithAbsolutePath defines or overwrites the absolute path used for this mount
+func WithAbsolutePath(path string) VirtualMountOption {
+	return func(vmo *VirtualMountOptions) {
+		absPath, err := ToAbsolutePath(path)
+		if err != nil {
+			panic(err)
+		}
+
+		vmo.Path = absPath
 	}
 }
 
-// WithType sets the mount type for metadata purposes.
-func WithType(typ string) VirtualMountOption {
-	return func(info *VirtualMountInfo) {
+// WithMountTime defines or overwrites the mounttime for this mount
+func WithMountTime(mountTime time.Time) VirtualMountOption {
+	return func(vmo *VirtualMountOptions) {
+		vmo.MountTime = mountTime
+	}
+}
 
+// WithDenyNesting specifies, if nested mountpoints are allowed within this mount
+func WithDenyNesting(denyNesting bool) VirtualMountOption {
+	return func(vmo *VirtualMountOptions) {
+		vmo.DenyNesting = denyNesting
+	}
+}
+
+// Using AsReadOnly sets the mount in a readonly state
+func AsReadOnly(ro bool) VirtualMountOption {
+	return func(vmo *VirtualMountOptions) {
+		vmo.ReadOnly = ro
 	}
 }

@@ -5,9 +5,11 @@ import "errors"
 // Standard VFS errors that Mount implementations should use.
 var (
 	// Path resolution errors
+	ErrInvalidPath    = errors.New("vfs: invalid path detected")
 	ErrNotMounted     = errors.New("vfs: path not mounted")
 	ErrAlreadyMounted = errors.New("vfs: path already mounted")
 	ErrMountBusy      = errors.New("vfs: mount point busy")
+	ErrNestingDenied  = errors.New("vfs: nesting denied by parent mount")
 
 	// File operation errors
 	ErrNotExist     = errors.New("vfs: file does not exist")
@@ -19,6 +21,7 @@ var (
 
 	// I/O errors
 	ErrClosed  = errors.New("vfs: file already closed")
+	ErrBusy    = errors.New("vfs: file is busy")
 	ErrInvalid = errors.New("vfs: invalid argument")
 	ErrInUse   = errors.New("vfs: file already in use")
 )

@@ -15,6 +15,10 @@ type VirtualFile interface {
 	io.Seeker
 	io.Closer
 
+	// IsBusy tries to return the current state of the stream.
+	// It should be used to determine, if it's safe to close a stream.
+	IsBusy() bool
+
 	// CanRead returns true if the virtual file can be read, otherwise false.
 	CanRead() bool
 
@@ -150,6 +154,16 @@ func (vf *virtualFileImpl) Close() error {
 	vf.vfs.mu.Unlock()
 
 	return nil
+}
+
+func (vf *virtualFileImpl) IsBusy() bool {
+	// Try to acquire the lock - if we can't immediately, the file is busy
+	if !vf.mu.TryLock() {
+		return true
+	}
+	// We got the lock, so it's not busy - release it
+	vf.mu.Unlock()
+	return false
 }
 
 // CanRead returns true if the virtual file can be read, otherwise false.

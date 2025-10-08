@@ -95,9 +95,9 @@ const (
 	AccessModeWrite                                // O_WRONLY: open for writing
 	AccessModeAppend                               // O_APPEND: append to file
 	AccessModeCreate                               // O_CREATE: create if not exists
-	AccessModeTrunc                                // O_TRUNC: truncate on open
-	AccessModeExcl                                 // O_EXCL: exclusive creation (with CREATE)
-	AccessModeSync                                 // O_SYNC: synchronous I/O
+	AccessModeTrunc                                // O_TRUNC:  truncate on open
+	AccessModeExcl                                 // O_EXCL:   exclusive creation (with CREATE)
+	AccessModeSync                                 // O_SYNC:   synchronous I/O
 )
 
 // IsReadOnly checks if the mode only allows reading.

@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -12,51 +13,63 @@ import (
 // abstraction with support for nested mounts and thread-safe operations.
 type VirtualFileSystem struct {
 	mu      sync.RWMutex
-	mounts  map[string]*VirtualFileSystemEntry
-	streams map[string]io.Closer // Active streams keyed by absolute path
+	mounts  map[string]*VirtualMountEntry
+	streams map[string]VirtualFile // Active streams keyed by absolute path
 }
 
-// VirtualFileSystemEntry represents a single mount point with its handler and metadata.
-type VirtualFileSystemEntry struct {
-	mount VirtualMount     // The storage backend handler
-	info  VirtualMountInfo // Metadata about the mount
+// VirtualMountEntry represents a single mount point with its handler and metadata.
+type VirtualMountEntry struct {
+	mount   VirtualMount         // The storage backend handler
+	options *VirtualMountOptions // Metadata options about the mount
 }
 
 // NewVfs creates a new VirtualFileSystem instance with no initial mounts.
 func NewVfs() *VirtualFileSystem {
 	return &VirtualFileSystem{
-		mounts:  make(map[string]*VirtualFileSystemEntry),
-		streams: make(map[string]io.Closer),
+		mounts:  make(map[string]*VirtualMountEntry),
+		streams: make(map[string]VirtualFile),
 	}
 }
 
 // Open opens a file with the specified access mode flags and returns a file handle.
 // The returned VirtualFile must be closed by the caller. Use flags to control access.
 func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags VirtualAccessMode) (VirtualFile, error) {
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
+	if err != nil {
+		return nil, err
+	}
 	// Check if file is already open
 	vfs.mu.RLock()
-	if _, exists := vfs.streams[path]; exists {
+	if _, exists := vfs.streams[absPath]; exists {
 		vfs.mu.RUnlock()
 		return nil, ErrInUse
 	}
 	vfs.mu.RUnlock()
 
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	entry, err := vfs.relativeMountForPath(absPath)
 	if err != nil {
 		return nil, err
 	}
 
+	if entry.options.ReadOnly {
+		if flags&AccessModeWrite != 0 || flags&AccessModeCreate != 0 || flags&AccessModeExcl != 0 {
+			return nil, ErrReadOnly
+		}
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
 	// Try to get file info
-	info, err := mount.Stat(ctx, relPath)
+	info, err := entry.mount.Stat(ctx, relPath)
 	if err != nil {
 		if err == ErrNotExist {
 			// Create file if it doesn't exist and CREATE flag is set
 			if flags.HasCreate() {
-				if err := mount.Create(ctx, relPath, false); err != nil {
+				if err := entry.mount.Create(ctx, relPath, false); err != nil {
 					return nil, err
 				}
 				// Refresh info after creation
-				info, err = mount.Stat(ctx, relPath)
+				info, err = entry.mount.Stat(ctx, relPath)
 				if err != nil {
 					return nil, err
 				}
@@ -84,16 +97,16 @@ func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags Virtu
 		offset = info.Size
 	} else if flags.HasTrunc() && (flags.IsWriteOnly() || flags.IsReadWrite()) {
 		// Only truncate if TRUNC flag is set and we have write access
-		if err := mount.Truncate(ctx, relPath, 0); err != nil {
+		if err := entry.mount.Truncate(ctx, relPath, 0); err != nil {
 			return nil, err
 		}
 	}
 
 	stream := &virtualFileImpl{
 		vfs:     vfs,
-		mount:   mount,
-		path:    relPath, // Relative path for mount operations
-		absPath: path,    // Absolute path for stream tracking
+		mount:   entry.mount,
+		path:    relPath,
+		absPath: absPath,
 		offset:  offset,
 		flags:   flags,
 		ctx:     ctx,
@@ -111,13 +124,20 @@ func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags Virtu
 // Read reads size bytes from the file at path starting at offset.
 // Returns the data read or an error if the operation fails.
 func (vfs *VirtualFileSystem) Read(ctx context.Context, path string, offset, size int64) ([]byte, error) {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return nil, err
 	}
 
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
 	buffer := make([]byte, size)
-	n, err := mount.Read(ctx, relPath, offset, buffer)
+	n, err := entry.mount.Read(ctx, relPath, offset, buffer)
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
@@ -128,24 +148,47 @@ func (vfs *VirtualFileSystem) Read(ctx context.Context, path string, offset, siz
 // Write writes data to the file at path starting at offset.
 // Returns the number of bytes written or an error if the operation fails.
 func (vfs *VirtualFileSystem) Write(ctx context.Context, path string, offset int64, data []byte) (int64, error) {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return 0, err
 	}
 
-	n, err := mount.Write(ctx, relPath, offset, data)
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return 0, err
+	}
+
+	if entry.options.ReadOnly {
+		return 0, ErrReadOnly
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
+	n, err := entry.mount.Write(ctx, relPath, offset, data)
 	return int64(n), err
 }
 
 // Close closes an open file handle at the given path.
 // This may be a no-op for implementations that don't maintain file handles.
-func (vfs *VirtualFileSystem) Close(ctx context.Context, path string) error {
+func (vfs *VirtualFileSystem) Close(ctx context.Context, path string, force bool) error {
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
+	if err != nil {
+		return err
+	}
+
 	vfs.mu.Lock()
-	stream, exists := vfs.streams[path]
+	stream, exists := vfs.streams[absPath]
 	vfs.mu.Unlock()
 
+	// No stream open for this path
 	if !exists {
-		return nil // No stream open for this path
+		return nil
+	}
+
+	// Avoid closing busy streams (unless forced)
+	if stream.IsBusy() && !force {
+		return ErrBusy
 	}
 
 	return stream.Close()
@@ -154,35 +197,69 @@ func (vfs *VirtualFileSystem) Close(ctx context.Context, path string) error {
 // MkDir creates a new directory at the specified path.
 // Returns an error if the directory already exists or cannot be created.
 func (vfs *VirtualFileSystem) MkDir(ctx context.Context, path string) error {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return err
 	}
 
-	return mount.Create(ctx, relPath, true)
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return err
+	}
+
+	if entry.options.ReadOnly {
+		return ErrReadOnly
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
+	return entry.mount.Create(ctx, relPath, true)
 }
 
 // RmDir removes an empty directory at the specified path.
 // Returns an error if the directory is not empty or doesn't exist.
 func (vfs *VirtualFileSystem) RmDir(ctx context.Context, path string) error {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return err
 	}
 
-	return mount.Delete(ctx, relPath, false)
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return err
+	}
+
+	if entry.options.ReadOnly {
+		return ErrReadOnly
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
+	return entry.mount.Delete(ctx, relPath, false)
 }
 
 // Unlink removes a file at the specified path.
 // Returns an error if the path is a directory or doesn't exist.
 func (vfs *VirtualFileSystem) Unlink(ctx context.Context, path string) error {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return err
 	}
 
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return err
+	}
+
+	if entry.options.ReadOnly {
+		return ErrReadOnly
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
+
 	// Check if it's a directory
-	info, err := mount.Stat(ctx, relPath)
+	info, err := entry.mount.Stat(ctx, relPath)
 	if err != nil {
 		return err
 	}
@@ -191,29 +268,31 @@ func (vfs *VirtualFileSystem) Unlink(ctx context.Context, path string) error {
 		return ErrIsDirectory
 	}
 
-	return mount.Delete(ctx, relPath, false)
+	return entry.mount.Delete(ctx, relPath, false)
 }
 
 // Rename moves or renames a file or directory from oldPath to newPath.
 // Returns an error if the operation cannot be completed.
 func (vfs *VirtualFileSystem) Rename(ctx context.Context, oldPath string, newPath string) error {
-	_, _, err := vfs.resolveMountAndPath(oldPath)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return fmt.Errorf("vfs: not implemented")
 }
 
 // ReadDir returns a list of entries in the directory at path.
 // Returns an error if the path is not a directory or doesn't exist.
 func (vfs *VirtualFileSystem) ReadDir(ctx context.Context, path string) ([]*VirtualFileInfo, error) {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	objects, err := mount.List(ctx, relPath)
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
+	objects, err := entry.mount.List(ctx, relPath)
 	if err != nil {
 		return nil, err
 	}
@@ -236,12 +315,19 @@ func (vfs *VirtualFileSystem) ReadDir(ctx context.Context, path string) ([]*Virt
 // Stat returns file information for the given path.
 // Returns an error if the path doesn't exist.
 func (vfs *VirtualFileSystem) Stat(ctx context.Context, path string) (*VirtualFileInfo, error) {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	info, err := mount.Stat(ctx, relPath)
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
+	info, err := entry.mount.Stat(ctx, relPath)
 	if err != nil {
 		return nil, err
 	}
@@ -259,36 +345,49 @@ func (vfs *VirtualFileSystem) Stat(ctx context.Context, path string) (*VirtualFi
 // Chmod changes the mode (permissions) of the file at path.
 // Returns an error if the operation is not supported or fails.
 func (vfs *VirtualFileSystem) Chmod(ctx context.Context, path string, mode VirtualFileMode) error {
-	_, _, err := vfs.resolveMountAndPath(path)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return fmt.Errorf("vfs: not implemented")
 }
 
 // Mount attaches a filesystem handler at the specified path.
 // Options can be used to configure the mount (e.g., read-only).
 func (vfs *VirtualFileSystem) Mount(ctx context.Context, path string, mount VirtualMount, opts ...VirtualMountOption) error {
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
+	if err != nil {
+		return err
+	}
+
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
-	if _, exists := vfs.mounts[path]; exists {
-		return ErrAlreadyMounted
-	}
-
-	info := &VirtualMountInfo{
-		Path:      path,
-		MountedAt: time.Now(),
+	options := &VirtualMountOptions{
+		Path:      absPath,
+		MountTime: time.Now(),
 	}
 
 	for _, opt := range opts {
-		opt(info)
+		opt(options)
 	}
 
-	vfs.mounts[path] = &VirtualFileSystemEntry{
-		mount: mount,
-		info:  *info,
+	mountPath := options.Path
+	if len(mountPath) == 0 {
+		return ErrInvalidPath
+	}
+
+	if _, exists := vfs.mounts[mountPath]; exists {
+		return ErrAlreadyMounted
+	}
+
+	// Check if parent mount denies nesting
+	if parent, err := vfs.relativeMountForPath(mountPath); err == nil {
+		if parent.options.DenyNesting {
+			return ErrNestingDenied
+		}
+	}
+
+	vfs.mounts[mountPath] = &VirtualMountEntry{
+		mount:   mount,
+		options: options,
 	}
 
 	return nil
@@ -297,30 +396,43 @@ func (vfs *VirtualFileSystem) Mount(ctx context.Context, path string, mount Virt
 // Unmount removes the filesystem handler at the specified path.
 // Returns an error if the path is not mounted or has child mounts.
 func (vfs *VirtualFileSystem) Unmount(ctx context.Context, path string) error {
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
+	if err != nil {
+		return err
+	}
+
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
-	if _, exists := vfs.mounts[path]; !exists {
+	if _, exists := vfs.mounts[absPath]; !exists {
 		return ErrNotMounted
 	}
 
-	if vfs.hasChildMounts(path) {
+	if vfs.hasChildMounts(absPath) {
 		return ErrMountBusy
 	}
 
-	delete(vfs.mounts, path)
+	delete(vfs.mounts, absPath)
 	return nil
 }
 
 // Lookup checks if a file or directory exists at the given path.
 // Returns true if the path exists, false otherwise.
 func (vfs *VirtualFileSystem) Lookup(ctx context.Context, path string) (bool, error) {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return false, err
 	}
 
-	info, err := mount.Stat(ctx, relPath)
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return false, err
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
+	info, err := entry.mount.Stat(ctx, relPath)
 	if err != nil {
 		return false, err
 	}
@@ -331,23 +443,26 @@ func (vfs *VirtualFileSystem) Lookup(ctx context.Context, path string) (bool, er
 // GetAttr retrieves extended attributes and metadata for the object at path.
 // Returns detailed object information including metadata.
 func (vfs *VirtualFileSystem) GetAttr(ctx context.Context, path string) (*VirtualObjectInfo, error) {
-	mount, relPath, err := vfs.resolveMountAndPath(path)
+	// Always start with an absolute path
+	absPath, err := ToAbsolutePath(path)
 	if err != nil {
 		return nil, err
 	}
 
-	return mount.Stat(ctx, relPath)
+	entry, err := vfs.relativeMountForPath(absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	relPath := ToRelativePath(absPath, entry.options.Path)
+
+	return entry.mount.Stat(ctx, relPath)
 }
 
 // SetAttr updates extended attributes and metadata for the object at path.
 // Returns true if the attributes were updated, false if the path doesn't exist.
 func (vfs *VirtualFileSystem) SetAttr(ctx context.Context, path string, info VirtualObjectInfo) (bool, error) {
-	_, _, err := vfs.resolveMountAndPath(path)
-	if err != nil {
-		return false, err
-	}
-
-	return false, nil
+	return false, fmt.Errorf("vfs: not implemented")
 }
 
 // Cleanup closes all currently open streams in the VFS.
@@ -370,35 +485,32 @@ func (vfs *VirtualFileSystem) Cleanup() error {
 	return firstErr
 }
 
-func (vfs *VirtualFileSystem) resolveMountAndPath(path string) (VirtualMount, string, error) {
-	// No mounts mean no resolve possible...
+func (vfs *VirtualFileSystem) relativeMountForPath(path string) (*VirtualMountEntry, error) {
+	// Skip, if no entries have been mounted yet
 	if len(vfs.mounts) == 0 {
-		return nil, "", ErrNotMounted
+		return nil, ErrNotMounted
 	}
 
 	vfs.mu.RLock()
 
-	var bestMatch string
-	for mp := range vfs.mounts {
+	var best *VirtualMountEntry
+	for mp, entry := range vfs.mounts {
 		if hasPrefix(path, mp) {
-			if len(mp) > len(bestMatch) {
-				bestMatch = mp
+			if len(path) == len(mp) || path[len(mp)-1] == '/' {
+				if best == nil || len(mp) > len(best.options.Path) {
+					best = entry
+				}
 			}
 		}
 	}
 
-	if bestMatch == "" {
-		vfs.mu.RUnlock()
-		return nil, "", ErrNotMounted
-	}
-
-	mount := vfs.mounts[bestMatch].mount
 	vfs.mu.RUnlock()
 
-	// Get relative path within mount
-	relPath := trimPrefix(path, bestMatch)
+	if best == nil {
+		return nil, ErrNotMounted
+	}
 
-	return mount, relPath, nil
+	return best, nil
 }
 
 func (vfs *VirtualFileSystem) hasChildMounts(parent string) bool {
