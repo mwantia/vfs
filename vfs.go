@@ -357,9 +357,6 @@ func (vfs *VirtualFileSystem) Mount(ctx context.Context, path string, mount Virt
 		return err
 	}
 
-	vfs.mu.Lock()
-	defer vfs.mu.Unlock()
-
 	options := &VirtualMountOptions{
 		Path:      absPath,
 		MountTime: time.Now(),
@@ -374,15 +371,34 @@ func (vfs *VirtualFileSystem) Mount(ctx context.Context, path string, mount Virt
 		return ErrInvalidPath
 	}
 
-	if _, exists := vfs.mounts[mountPath]; exists {
-		return ErrAlreadyMounted
-	}
-
-	// Check if parent mount denies nesting
+	// Check if parent mount denies nesting BEFORE acquiring write lock
 	if parent, err := vfs.relativeMountForPath(mountPath); err == nil {
 		if parent.options.DenyNesting {
 			return ErrNestingDenied
 		}
+	}
+
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	if _, exists := vfs.mounts[mountPath]; exists {
+		return ErrAlreadyMounted
+	}
+
+	for existingPath, entry := range vfs.mounts {
+		if entry.mount == mount {
+			if hasPrefix(mountPath, existingPath) && mountPath != existingPath {
+				return ErrCircularReference
+			}
+
+			if hasPrefix(existingPath, mountPath) && mountPath != existingPath {
+				return ErrCircularReference
+			}
+		}
+	}
+
+	if err := mount.Mount(ctx, mountPath, vfs); err != nil {
+		return ErrMountFailed
 	}
 
 	vfs.mounts[mountPath] = &VirtualMountEntry{
@@ -405,12 +421,17 @@ func (vfs *VirtualFileSystem) Unmount(ctx context.Context, path string) error {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
-	if _, exists := vfs.mounts[absPath]; !exists {
+	entry, exists := vfs.mounts[absPath]
+	if !exists {
 		return ErrNotMounted
 	}
 
 	if vfs.hasChildMounts(absPath) {
 		return ErrMountBusy
+	}
+
+	if err := entry.mount.Unmount(ctx, absPath, vfs); err != nil {
+		return ErrUnmountFailed
 	}
 
 	delete(vfs.mounts, absPath)
@@ -496,7 +517,9 @@ func (vfs *VirtualFileSystem) relativeMountForPath(path string) (*VirtualMountEn
 	var best *VirtualMountEntry
 	for mp, entry := range vfs.mounts {
 		if hasPrefix(path, mp) {
-			if len(path) == len(mp) || path[len(mp)-1] == '/' {
+			// For root mount ("/"), it matches everything
+			// For other mounts, ensure exact match or path continues with /
+			if mp == "/" || len(path) == len(mp) || (len(path) > len(mp) && path[len(mp)] == '/') {
 				if best == nil || len(mp) > len(best.options.Path) {
 					best = entry
 				}

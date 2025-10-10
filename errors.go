@@ -11,6 +11,12 @@ var (
 	ErrMountBusy      = errors.New("vfs: mount point busy")
 	ErrNestingDenied  = errors.New("vfs: nesting denied by parent mount")
 
+	// Mount lifecycle errors
+	ErrMountFailed        = errors.New("vfs: mount initialization failed")
+	ErrUnmountFailed      = errors.New("vfs: unmount cleanup failed")
+	ErrSelfReferential    = errors.New("vfs: self-referential mount not allowed")
+	ErrCircularReference  = errors.New("vfs: circular mount reference detected")
+
 	// File operation errors
 	ErrNotExist     = errors.New("vfs: file does not exist")
 	ErrExist        = errors.New("vfs: file already exists")

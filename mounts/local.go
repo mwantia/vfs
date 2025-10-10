@@ -39,6 +39,40 @@ func (lm *LocalMount) GetCapabilities() vfs.VirtualMountCapabilities {
 	}
 }
 
+// Mount is called when the mount is being attached to the VFS.
+// For LocalMount, this verifies that the root directory exists and is accessible.
+func (lm *LocalMount) Mount(ctx context.Context, path string, vfsInstance *vfs.VirtualFileSystem) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	// Verify the root directory exists
+	info, err := os.Stat(lm.root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("mount root does not exist: %s", lm.root)
+		}
+		if errors.Is(err, fs.ErrPermission) {
+			return vfs.ErrPermission
+		}
+		return fmt.Errorf("failed to access mount root: %w", err)
+	}
+
+	// Ensure the root is a directory
+	if !info.IsDir() {
+		return fmt.Errorf("mount root is not a directory: %s", lm.root)
+	}
+
+	return nil
+}
+
+// Unmount is called when the mount is being detached from the VFS.
+// For LocalMount, this is primarily a safety check - no cleanup needed for filesystem.
+func (lm *LocalMount) Unmount(ctx context.Context, path string, vfsInstance *vfs.VirtualFileSystem) error {
+	// LocalMount doesn't maintain any resources that need cleanup
+	// The underlying filesystem persists independently
+	return nil
+}
+
 // Stat returns information about a file or directory on the local filesystem.
 func (lm *LocalMount) Stat(ctx context.Context, path string) (*vfs.VirtualObjectInfo, error) {
 	lm.mu.RLock()

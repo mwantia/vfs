@@ -12,6 +12,10 @@ type VirtualMount interface {
 	// GetCapabilities returns a list of supported capabilities for this mount.
 	GetCapabilities() VirtualMountCapabilities
 
+	Mount(ctx context.Context, path string, vfs *VirtualFileSystem) error
+
+	Unmount(ctx context.Context, path string, vfs *VirtualFileSystem) error
+
 	// Stat returns information about a virtual object.
 	// Returns ErrNotExist if the path doesn't exist.
 	Stat(ctx context.Context, path string) (*VirtualObjectInfo, error)
@@ -94,15 +98,15 @@ func WithMountTime(mountTime time.Time) VirtualMountOption {
 }
 
 // WithDenyNesting specifies, if nested mountpoints are allowed within this mount
-func WithDenyNesting(denyNesting bool) VirtualMountOption {
+func WithDenyNesting() VirtualMountOption {
 	return func(vmo *VirtualMountOptions) {
-		vmo.DenyNesting = denyNesting
+		vmo.DenyNesting = true
 	}
 }
 
 // Using AsReadOnly sets the mount in a readonly state
-func AsReadOnly(ro bool) VirtualMountOption {
+func AsReadOnly() VirtualMountOption {
 	return func(vmo *VirtualMountOptions) {
-		vmo.ReadOnly = ro
+		vmo.ReadOnly = true
 	}
 }

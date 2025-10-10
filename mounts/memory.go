@@ -56,6 +56,30 @@ func (m *MemoryMount) GetCapabilities() vfs.VirtualMountCapabilities {
 	}
 }
 
+// Mount is called when the mount is being attached to the VFS.
+// For MemoryMount, this is a no-op since all initialization happens in NewMemory.
+func (m *MemoryMount) Mount(ctx context.Context, path string, vfs *vfs.VirtualFileSystem) error {
+	// MemoryMount doesn't need special initialization during mount
+	// All resources are already initialized in NewMemory
+	return nil
+}
+
+// Unmount is called when the mount is being detached from the VFS.
+// For MemoryMount, this clears all in-memory data to prevent memory leaks.
+func (m *MemoryMount) Unmount(ctx context.Context, path string, vfs *vfs.VirtualFileSystem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Clear all files except root to free memory
+	for k := range m.files {
+		if k != "" {
+			delete(m.files, k)
+		}
+	}
+
+	return nil
+}
+
 // Create creates a new file or directory at the given path.
 // Returns ErrExist if the path already exists.
 // Parent directories must exist - they are NOT created automatically.
