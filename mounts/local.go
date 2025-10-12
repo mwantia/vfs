@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/mwantia/vfs"
+	"github.com/mwantia/vfs/data"
 )
 
 // LocalMount provides access to the local filesystem.
@@ -74,7 +75,7 @@ func (lm *LocalMount) Unmount(ctx context.Context, path string, vfsInstance *vfs
 }
 
 // Stat returns information about a file or directory on the local filesystem.
-func (lm *LocalMount) Stat(ctx context.Context, path string) (*vfs.VirtualObjectInfo, error) {
+func (lm *LocalMount) Stat(ctx context.Context, path string) (*data.VirtualFileInfo, error) {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
@@ -94,7 +95,7 @@ func (lm *LocalMount) Stat(ctx context.Context, path string) (*vfs.VirtualObject
 }
 
 // List returns all entries for a path.
-func (lm *LocalMount) List(ctx context.Context, path string) ([]*vfs.VirtualObjectInfo, error) {
+func (lm *LocalMount) List(ctx context.Context, path string) ([]*data.VirtualFileInfo, error) {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
@@ -111,7 +112,7 @@ func (lm *LocalMount) List(ctx context.Context, path string) ([]*vfs.VirtualObje
 	}
 
 	if !info.IsDir() {
-		return []*vfs.VirtualObjectInfo{
+		return []*data.VirtualFileInfo{
 			lm.fileInfoToVirtual(info, path),
 		}, nil
 	}
@@ -121,12 +122,13 @@ func (lm *LocalMount) List(ctx context.Context, path string) ([]*vfs.VirtualObje
 		return nil, err
 	}
 
-	infos := make([]*vfs.VirtualObjectInfo, 0, len(entries))
+	infos := make([]*data.VirtualFileInfo, 0, len(entries))
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
+
 		childPath := filepath.Join(path, entry.Name())
 		infos = append(infos, lm.fileInfoToVirtual(info, childPath))
 	}
@@ -232,17 +234,12 @@ func (lm *LocalMount) Delete(ctx context.Context, path string, force bool) error
 		return err
 	}
 
+	// Directories require force=true to delete (proper filesystem semantics)
 	if info.IsDir() {
-		if force {
-			return os.RemoveAll(fullPath)
+		if !force {
+			return vfs.ErrIsDirectory
 		}
-		entries, err := os.ReadDir(fullPath)
-		if err != nil {
-			return err
-		}
-		if len(entries) > 0 {
-			return fmt.Errorf("directory not empty")
-		}
+		return os.RemoveAll(fullPath)
 	}
 
 	return os.Remove(fullPath)
@@ -263,23 +260,22 @@ func (lm *LocalMount) resolvePath(path string) string {
 }
 
 // fileInfoToVirtual converts os.FileInfo to VirtualObjectInfo.
-func (lm *LocalMount) fileInfoToVirtual(info fs.FileInfo, path string) *vfs.VirtualObjectInfo {
-	objType := vfs.ObjectTypeFile
+func (lm *LocalMount) fileInfoToVirtual(info fs.FileInfo, path string) *data.VirtualFileInfo {
+	objType := data.NodeTypeFile
 	if info.IsDir() {
-		objType = vfs.ObjectTypeDirectory
+		objType = data.NodeTypeDirectory
 	}
 
-	mode := vfs.VirtualFileMode(info.Mode().Perm())
+	mode := data.VirtualFileMode(info.Mode().Perm())
 	if info.IsDir() {
-		mode |= vfs.ModeDir
+		mode |= data.ModeDir
 	}
 
-	return &vfs.VirtualObjectInfo{
-		Path:    path,
-		Name:    info.Name(),
-		Type:    objType,
-		Size:    info.Size(),
-		Mode:    mode,
-		ModTime: info.ModTime(),
+	return &data.VirtualFileInfo{
+		Path:       path,
+		Type:       objType,
+		Size:       info.Size(),
+		Mode:       mode,
+		ModifyTime: info.ModTime(),
 	}
 }

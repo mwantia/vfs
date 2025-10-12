@@ -13,6 +13,7 @@ import (
 	_ "modernc.org/sqlite" // Pure Go SQLite driver (CGO_ENABLED=0 compatible)
 
 	"github.com/mwantia/vfs"
+	"github.com/mwantia/vfs/data"
 )
 
 // SQLiteMount provides a virtual filesystem backed by a SQLite database.
@@ -70,7 +71,7 @@ func (sm *SQLiteMount) initSchema() error {
 	_, err = sm.db.Exec(`
 		INSERT OR IGNORE INTO vfs_files (path, name, is_dir, size, mode, mod_time)
 		VALUES ('', '', 1, 0, ?, ?)
-	`, int(vfs.ModeDir|0755), time.Now().Unix())
+	`, int(data.ModeDir|0755), time.Now().Unix())
 
 	return err
 }
@@ -148,7 +149,7 @@ func (sm *SQLiteMount) Create(ctx context.Context, p string, isDir bool) error {
 
 	mode := 0644
 	if isDir {
-		mode = int(vfs.ModeDir | 0755)
+		mode = int(data.ModeDir | 0755)
 	}
 
 	_, err = sm.db.ExecContext(ctx, `
@@ -264,23 +265,9 @@ func (sm *SQLiteMount) Delete(ctx context.Context, p string, force bool) error {
 		return err
 	}
 
+	// Directories require force=true to delete (proper filesystem semantics)
 	if isDir == 1 && !force {
-		// Check for children
-		var count int
-		prefix := p
-		if prefix != "" {
-			prefix += "/"
-		}
-		err = sm.db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM vfs_files 
-			WHERE path != ? AND path LIKE ? || '%'
-		`, p, prefix).Scan(&count)
-		if err != nil {
-			return err
-		}
-		if count > 0 {
-			return fmt.Errorf("directory not empty")
-		}
+		return vfs.ErrIsDirectory
 	}
 
 	if force && isDir == 1 {
@@ -300,7 +287,7 @@ func (sm *SQLiteMount) Delete(ctx context.Context, p string, force bool) error {
 }
 
 // List returns all objects under the given path.
-func (sm *SQLiteMount) List(ctx context.Context, p string) ([]*vfs.VirtualObjectInfo, error) {
+func (sm *SQLiteMount) List(ctx context.Context, p string) ([]*data.VirtualFileInfo, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -319,7 +306,7 @@ func (sm *SQLiteMount) List(ctx context.Context, p string) ([]*vfs.VirtualObject
 		if err != nil {
 			return nil, err
 		}
-		return []*vfs.VirtualObjectInfo{info}, nil
+		return []*data.VirtualFileInfo{info}, nil
 	}
 
 	// For directories, return direct children
@@ -339,7 +326,7 @@ func (sm *SQLiteMount) List(ctx context.Context, p string) ([]*vfs.VirtualObject
 	defer rows.Close()
 
 	seen := make(map[string]bool)
-	var objects []*vfs.VirtualObjectInfo
+	var objects []*data.VirtualFileInfo
 
 	for rows.Next() {
 		var objPath, name string
@@ -368,23 +355,22 @@ func (sm *SQLiteMount) List(ctx context.Context, p string) ([]*vfs.VirtualObject
 			isChildDir = true
 		}
 
-		objType := vfs.ObjectTypeFile
-		objMode := vfs.VirtualFileMode(mode)
+		objType := data.NodeTypeFile
+		objMode := data.VirtualFileMode(mode)
 		objSize := size
 
 		if isChildDir {
-			objType = vfs.ObjectTypeDirectory
-			objMode = vfs.ModeDir | 0755
+			objType = data.NodeTypeDirectory
+			objMode = data.ModeDir | 0755
 			objSize = 0
 		}
 
-		objects = append(objects, &vfs.VirtualObjectInfo{
-			Path:    childPath,
-			Name:    childName,
-			Type:    objType,
-			Size:    objSize,
-			Mode:    objMode,
-			ModTime: time.Unix(modTime, 0),
+		objects = append(objects, &data.VirtualFileInfo{
+			Path:       childPath,
+			Type:       objType,
+			Size:       objSize,
+			Mode:       objMode,
+			ModifyTime: time.Unix(modTime, 0),
 		})
 	}
 
@@ -392,7 +378,7 @@ func (sm *SQLiteMount) List(ctx context.Context, p string) ([]*vfs.VirtualObject
 }
 
 // Stat returns information about a file or directory.
-func (sm *SQLiteMount) Stat(ctx context.Context, p string) (*vfs.VirtualObjectInfo, error) {
+func (sm *SQLiteMount) Stat(ctx context.Context, p string) (*data.VirtualFileInfo, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -400,7 +386,7 @@ func (sm *SQLiteMount) Stat(ctx context.Context, p string) (*vfs.VirtualObjectIn
 }
 
 // statInternal is the internal implementation of Stat without locking.
-func (sm *SQLiteMount) statInternal(ctx context.Context, p string) (*vfs.VirtualObjectInfo, error) {
+func (sm *SQLiteMount) statInternal(ctx context.Context, p string) (*data.VirtualFileInfo, error) {
 	var name string
 	var isDir, mode int
 	var size, modTime int64
@@ -417,18 +403,17 @@ func (sm *SQLiteMount) statInternal(ctx context.Context, p string) (*vfs.Virtual
 		return nil, err
 	}
 
-	objType := vfs.ObjectTypeFile
+	objType := data.NodeTypeFile
 	if isDir == 1 {
-		objType = vfs.ObjectTypeDirectory
+		objType = data.NodeTypeDirectory
 	}
 
-	return &vfs.VirtualObjectInfo{
-		Path:    p,
-		Name:    name,
-		Type:    objType,
-		Size:    size,
-		Mode:    vfs.VirtualFileMode(mode),
-		ModTime: time.Unix(modTime, 0),
+	return &data.VirtualFileInfo{
+		Path:       p,
+		Type:       objType,
+		Size:       size,
+		Mode:       data.VirtualFileMode(mode),
+		ModifyTime: time.Unix(modTime, 0),
 	}, nil
 }
 

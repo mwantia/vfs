@@ -11,15 +11,21 @@ type VirtualMountCapabilities struct {
 // VirtualMountCapability represents a specific feature that a mount may support.
 type VirtualMountCapability string
 
-// Standard mount capabilities that implementations can declare.
 const (
-	VirtualMountCapabilityCRUD        VirtualMountCapability = "CRUD"        // Basic create, read, update, delete operations
-	VirtualMountCapabilityEncrypt     VirtualMountCapability = "Encrypt"     // Transparent encryption/decryption
-	VirtualMountCapabilityMetadata    VirtualMountCapability = "Metadata"    // Extended metadata storage
-	VirtualMountCapabilityPermissions VirtualMountCapability = "Permissions" // Unix-style permissions enforcement
-	VirtualMountCapabilitySnapshot    VirtualMountCapability = "Snapshot"    // Point-in-time snapshots
-	VirtualMountCapabilityStreaming   VirtualMountCapability = "Streaming"   // Streaming I/O support
-	VirtualMountCapabilityQuery       VirtualMountCapability = "Query"       // Advanced query operations
+	// Basic create, read, update, delete operations
+	VirtualMountCapabilityCRUD VirtualMountCapability = "CRUD"
+	// Transparent encryption/decryption
+	VirtualMountCapabilityEncrypt VirtualMountCapability = "Encrypt"
+	// Extended metadata storage
+	VirtualMountCapabilityMetadata VirtualMountCapability = "Metadata"
+	// Unix-style permissions enforcement
+	VirtualMountCapabilityPermissions VirtualMountCapability = "Permissions"
+	// Point-in-time snapshots
+	VirtualMountCapabilitySnapshot VirtualMountCapability = "Snapshot"
+	// Streaming I/O support
+	VirtualMountCapabilityStreaming VirtualMountCapability = "Streaming"
+	// Advanced query operations
+	VirtualMountCapabilityQuery VirtualMountCapability = "Query"
 )
 
 // ValidateCapability checks if a specific capability is supported by the mount.

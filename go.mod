@@ -2,7 +2,10 @@ module github.com/mwantia/vfs
 
 go 1.24.3
 
-require modernc.org/sqlite v1.39.0
+require (
+	github.com/tidwall/btree v1.8.1
+	modernc.org/sqlite v1.39.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

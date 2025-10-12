@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"sync"
+
+	"github.com/mwantia/vfs/data"
 )
 
 // VirtualFile combines all file operation interfaces for VFS streaming.
@@ -34,7 +36,7 @@ type virtualFileImpl struct {
 	path    string // Relative path for mount operations
 	absPath string // Absolute path for stream tracking
 	offset  int64
-	flags   VirtualAccessMode
+	flags   data.VirtualAccessMode
 	closed  bool
 
 	mu  sync.RWMutex
@@ -168,10 +170,10 @@ func (vf *virtualFileImpl) IsBusy() bool {
 
 // CanRead returns true if the virtual file can be read, otherwise false.
 func (vf *virtualFileImpl) CanRead() bool {
-	return vf.flags&AccessModeRead != 0
+	return vf.flags&data.AccessModeRead != 0
 }
 
 // CanWrite returns true if the virtual file can be written, otherwise false.
 func (vf *virtualFileImpl) CanWrite() bool {
-	return vf.flags&AccessModeWrite != 0
+	return vf.flags&data.AccessModeWrite != 0
 }

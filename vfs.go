@@ -6,6 +6,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/mwantia/vfs/data"
 )
 
 // VirtualFileSystem is the main VFS manager that handles mount points and delegates
@@ -33,7 +35,7 @@ func NewVfs() *VirtualFileSystem {
 
 // Open opens a file with the specified access mode flags and returns a file handle.
 // The returned VirtualFile must be closed by the caller. Use flags to control access.
-func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags VirtualAccessMode) (VirtualFile, error) {
+func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags data.VirtualAccessMode) (VirtualFile, error) {
 	// Always start with an absolute path
 	absPath, err := ToAbsolutePath(path)
 	if err != nil {
@@ -53,7 +55,7 @@ func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags Virtu
 	}
 
 	if entry.options.ReadOnly {
-		if flags&AccessModeWrite != 0 || flags&AccessModeCreate != 0 || flags&AccessModeExcl != 0 {
+		if flags&data.AccessModeWrite != 0 || flags&data.AccessModeCreate != 0 || flags&data.AccessModeExcl != 0 {
 			return nil, ErrReadOnly
 		}
 	}
@@ -85,7 +87,7 @@ func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags Virtu
 			return nil, ErrExist
 		}
 
-		if info.Type == ObjectTypeDirectory {
+		if info.IsDir() {
 			return nil, ErrIsDirectory
 		}
 	}
@@ -264,7 +266,7 @@ func (vfs *VirtualFileSystem) Unlink(ctx context.Context, path string) error {
 		return err
 	}
 
-	if info.Type == ObjectTypeDirectory {
+	if info.IsDir() {
 		return ErrIsDirectory
 	}
 
@@ -279,7 +281,7 @@ func (vfs *VirtualFileSystem) Rename(ctx context.Context, oldPath string, newPat
 
 // ReadDir returns a list of entries in the directory at path.
 // Returns an error if the path is not a directory or doesn't exist.
-func (vfs *VirtualFileSystem) ReadDir(ctx context.Context, path string) ([]*VirtualFileInfo, error) {
+func (vfs *VirtualFileSystem) ReadDir(ctx context.Context, path string) ([]*data.VirtualFileInfo, error) {
 	// Always start with an absolute path
 	absPath, err := ToAbsolutePath(path)
 	if err != nil {
@@ -297,24 +299,12 @@ func (vfs *VirtualFileSystem) ReadDir(ctx context.Context, path string) ([]*Virt
 		return nil, err
 	}
 
-	result := make([]*VirtualFileInfo, len(objects))
-	for i, obj := range objects {
-		result[i] = &VirtualFileInfo{
-			Name:    obj.Name,
-			Path:    obj.Path,
-			Size:    obj.Size,
-			Mode:    obj.Mode,
-			IsDir:   obj.Type == ObjectTypeDirectory,
-			ModTime: obj.ModTime,
-		}
-	}
-
-	return result, nil
+	return objects, nil
 }
 
 // Stat returns file information for the given path.
 // Returns an error if the path doesn't exist.
-func (vfs *VirtualFileSystem) Stat(ctx context.Context, path string) (*VirtualFileInfo, error) {
+func (vfs *VirtualFileSystem) Stat(ctx context.Context, path string) (*data.VirtualFileInfo, error) {
 	// Always start with an absolute path
 	absPath, err := ToAbsolutePath(path)
 	if err != nil {
@@ -332,19 +322,12 @@ func (vfs *VirtualFileSystem) Stat(ctx context.Context, path string) (*VirtualFi
 		return nil, err
 	}
 
-	return &VirtualFileInfo{
-		Name:    info.Name,
-		Path:    info.Path,
-		Size:    info.Size,
-		Mode:    info.Mode,
-		IsDir:   info.Type == ObjectTypeDirectory,
-		ModTime: info.ModTime,
-	}, nil
+	return info, nil
 }
 
 // Chmod changes the mode (permissions) of the file at path.
 // Returns an error if the operation is not supported or fails.
-func (vfs *VirtualFileSystem) Chmod(ctx context.Context, path string, mode VirtualFileMode) error {
+func (vfs *VirtualFileSystem) Chmod(ctx context.Context, path string, mode data.VirtualFileMode) error {
 	return fmt.Errorf("vfs: not implemented")
 }
 
@@ -463,7 +446,7 @@ func (vfs *VirtualFileSystem) Lookup(ctx context.Context, path string) (bool, er
 
 // GetAttr retrieves extended attributes and metadata for the object at path.
 // Returns detailed object information including metadata.
-func (vfs *VirtualFileSystem) GetAttr(ctx context.Context, path string) (*VirtualObjectInfo, error) {
+func (vfs *VirtualFileSystem) GetAttr(ctx context.Context, path string) (*data.VirtualFileInfo, error) {
 	// Always start with an absolute path
 	absPath, err := ToAbsolutePath(path)
 	if err != nil {
@@ -482,7 +465,7 @@ func (vfs *VirtualFileSystem) GetAttr(ctx context.Context, path string) (*Virtua
 
 // SetAttr updates extended attributes and metadata for the object at path.
 // Returns true if the attributes were updated, false if the path doesn't exist.
-func (vfs *VirtualFileSystem) SetAttr(ctx context.Context, path string, info VirtualObjectInfo) (bool, error) {
+func (vfs *VirtualFileSystem) SetAttr(ctx context.Context, path string, info data.VirtualFileInfo) (bool, error) {
 	return false, fmt.Errorf("vfs: not implemented")
 }
 

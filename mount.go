@@ -3,6 +3,8 @@ package vfs
 import (
 	"context"
 	"time"
+
+	"github.com/mwantia/vfs/data"
 )
 
 // VirtualMount represents a mounted filesystem.
@@ -12,19 +14,21 @@ type VirtualMount interface {
 	// GetCapabilities returns a list of supported capabilities for this mount.
 	GetCapabilities() VirtualMountCapabilities
 
+	// Mount
 	Mount(ctx context.Context, path string, vfs *VirtualFileSystem) error
 
+	// Unmount
 	Unmount(ctx context.Context, path string, vfs *VirtualFileSystem) error
 
 	// Stat returns information about a virtual object.
 	// Returns ErrNotExist if the path doesn't exist.
-	Stat(ctx context.Context, path string) (*VirtualObjectInfo, error)
+	Stat(ctx context.Context, path string) (*data.VirtualFileInfo, error)
 
 	// List returns all virtual objects under the given path.
 	// For directories, returns all direct children.
 	// For files, returns single entry with the file's info.
 	// Returns ErrNotExist if the path doesn't exist.
-	List(ctx context.Context, path string) ([]*VirtualObjectInfo, error)
+	List(ctx context.Context, path string) ([]*data.VirtualFileInfo, error)
 
 	// Read reads up to len(data) bytes from the object at path starting at offset.
 	// Returns the number of bytes read and any error encountered.
