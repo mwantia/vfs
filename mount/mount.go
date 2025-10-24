@@ -164,8 +164,8 @@ func (vm *VirtualMount) List(ctx context.Context, path string) ([]*data.VirtualF
 			return nil, err
 		}
 
-		// For files, return single entry
-		if !meta.IsDir() {
+		// For non-directories, return single entry
+		if !meta.Mode.IsDir() {
 			return []*data.VirtualFileMetadata{meta}, nil
 		}
 
@@ -243,7 +243,7 @@ func (vm *VirtualMount) Write(ctx context.Context, path string, offset int64, da
 		}
 
 		// Validate it's not a directory
-		if meta.IsDir() {
+		if meta.Mode.IsDir() {
 			return 0, data.ErrIsDirectory
 		}
 	}
@@ -287,7 +287,7 @@ func (vm *VirtualMount) Write(ctx context.Context, path string, offset int64, da
 // For files, isDir should be false. For directories, isDir should be true.
 // Returns ErrExist if the path already exists.
 // Parent directories are NOT created automatically - they must exist.
-func (vm *VirtualMount) Create(ctx context.Context, path string, fileType data.VirtualFileType, fileMode data.VirtualFileMode) error {
+func (vm *VirtualMount) Create(ctx context.Context, path string, fileMode data.VirtualFileMode) error {
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
 
@@ -301,7 +301,7 @@ func (vm *VirtualMount) Create(ctx context.Context, path string, fileType data.V
 	}
 
 	// Create in storage backend
-	stat, err := vm.storage.CreateObject(ctx, key, fileType, fileMode)
+	stat, err := vm.storage.CreateObject(ctx, key, fileMode)
 	if err != nil {
 		return err
 	}
@@ -348,7 +348,7 @@ func (vm *VirtualMount) Delete(ctx context.Context, path string, force bool) err
 		if force {
 			// Get the metadata to check if it's a directory
 			meta, err := vm.options.metadata.ReadMeta(ctx, key)
-			if err == nil && meta.IsDir() {
+			if err == nil && meta.Mode.IsDir() {
 				// Delete all child metadata entries
 				// This is backend-specific, so we just delete the parent for now
 				// The backend should handle cascading deletes
@@ -392,7 +392,7 @@ func (vm *VirtualMount) Truncate(ctx context.Context, path string, size int64) e
 		}
 
 		// Validate it's not a directory
-		if meta.IsDir() {
+		if meta.Mode.IsDir() {
 			return data.ErrIsDirectory
 		}
 	}

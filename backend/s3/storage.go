@@ -12,7 +12,7 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-func (sb *S3Backend) CreateObject(ctx context.Context, key string, fileType data.VirtualFileType, fileMode data.VirtualFileMode) (*data.VirtualFileStat, error) {
+func (sb *S3Backend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -25,7 +25,7 @@ func (sb *S3Backend) CreateObject(ctx context.Context, key string, fileType data
 	}
 
 	// For directories, create a zero-byte object with trailing slash
-	if fileMode.IsDir() {
+	if mode.IsDir() {
 		if !strings.HasSuffix(key, "/") {
 			key += "/"
 		}
@@ -45,8 +45,7 @@ func (sb *S3Backend) CreateObject(ctx context.Context, key string, fileType data
 
 	return &data.VirtualFileStat{
 		Key:  key,
-		Type: fileType,
-		Mode: fileMode,
+		Mode: mode,
 		Size: 0,
 
 		CreateTime: now,
@@ -381,12 +380,9 @@ func (sb *S3Backend) TruncateObject(ctx context.Context, key string, size int64)
 func (sb *S3Backend) toVirtualFileStat(key string, objInfo minio.ObjectInfo) *data.VirtualFileStat {
 	// Determine if it's a directory
 	isDir := strings.HasSuffix(objInfo.Key, "/") || objInfo.ContentType == "application/x-directory"
-
-	virtType := data.FileTypeFile
 	virtMode := data.VirtualFileMode(0644)
 
 	if isDir {
-		virtType = data.FileTypeDirectory
 		virtMode = data.ModeDir | 0755
 		// Remove trailing slash from key for consistency
 		key = strings.TrimSuffix(key, "/")
@@ -401,7 +397,6 @@ func (sb *S3Backend) toVirtualFileStat(key string, objInfo minio.ObjectInfo) *da
 	return &data.VirtualFileStat{
 		Key:        baseName,
 		Size:       objInfo.Size,
-		Type:       virtType,
 		Mode:       virtMode,
 		ModifyTime: objInfo.LastModified,
 		CreateTime: objInfo.LastModified, // S3 doesn't track creation time separately

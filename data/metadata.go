@@ -5,6 +5,17 @@ import (
 	"time"
 )
 
+type VirtualFileType string
+
+const (
+	FileTypeDir       VirtualFileType = "directory"
+	FileTypeSymlink   VirtualFileType = "symlink"
+	FileTypeNamedPipe VirtualFileType = "namedpipe"
+	FileTypeSocket    VirtualFileType = "socket"
+	FileTypeDevice    VirtualFileType = "device"
+	FileTypeRegular   VirtualFileType = "regular"
+)
+
 // VirtualFileMetadata represents the core metadata structure.
 type VirtualFileMetadata struct {
 	// Unique identifier for metadata lookup
@@ -13,10 +24,8 @@ type VirtualFileMetadata struct {
 	// Relative key within the backend
 	Key string `json:"key"`
 
-	// Type of object (file, directory, etc.)
-	Type VirtualFileType `json:"type"`
-
 	// Unix-style mode and permissions
+	// Also used as type of object (file, directory, etc.)
 	Mode VirtualFileMode `json:"mode"`
 
 	// Size in bytes (0 for directories)
@@ -55,7 +64,6 @@ func (vfm *VirtualFileMetadata) Unmarshal(data []byte) error {
 func (vfm *VirtualFileMetadata) ToStat() *VirtualFileStat {
 	return &VirtualFileStat{
 		Key:         vfm.Key,
-		Type:        vfm.Type,
 		Mode:        vfm.Mode,
 		Size:        vfm.Size,
 		ModifyTime:  vfm.ModifyTime,
@@ -65,19 +73,22 @@ func (vfm *VirtualFileMetadata) ToStat() *VirtualFileStat {
 	}
 }
 
-// IsDir returns true if this object is a directory.
-func (vfm *VirtualFileMetadata) IsDir() bool {
-	return vfm.Type == FileTypeDirectory || vfm.Type == FileTypeMount
-}
-
-// IsFile returns true if this object is a regular file.
-func (vfm *VirtualFileMetadata) IsFile() bool {
-	return vfm.Type == FileTypeFile
-}
-
-// IsSymlink returns true if this object is a symbolic link.
-func (vfm *VirtualFileMetadata) IsSymlink() bool {
-	return vfm.Type == FileTypeSymlink
+// GetType returns the filetype defined to this metadata
+func (vfm *VirtualFileMetadata) GetType() VirtualFileType {
+	switch {
+	case vfm.Mode.IsDir():
+		return FileTypeDir
+	case vfm.Mode.IsSymlink():
+		return FileTypeSymlink
+	case vfm.Mode.IsNamedPipe():
+		return FileTypeNamedPipe
+	case vfm.Mode.IsSocket():
+		return FileTypeSocket
+	case vfm.Mode.IsDevice():
+		return FileTypeDevice
+	default:
+		return FileTypeRegular
+	}
 }
 
 // Clone creates a deep copy of the object info.

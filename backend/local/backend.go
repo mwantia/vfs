@@ -76,23 +76,17 @@ func (lb *LocalBackend) resolvePath(path string) string {
 
 // toVirtualFileStat converts os.FileInfo to a VirtualFileStat.
 func (lb *LocalBackend) toVirtualFileStat(key string, fileInfo os.FileInfo) *data.VirtualFileStat {
-	virtType := data.FileTypeFile
 	virtMode := data.VirtualFileMode(fileInfo.Mode().Perm())
-
 	if fileInfo.IsDir() {
-		virtType = data.FileTypeDirectory
 		virtMode |= data.ModeDir
 	}
-
-	contentType := data.GetMIMEType(fileInfo.Name())
 
 	return &data.VirtualFileStat{
 		Key:  key,
 		Size: fileInfo.Size(),
-		Type: virtType,
 		Mode: virtMode,
 
 		ModifyTime:  fileInfo.ModTime(),
-		ContentType: contentType,
+		ContentType: data.GetMIMEType(fileInfo.Name()),
 	}
 }

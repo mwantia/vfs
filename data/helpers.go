@@ -6,14 +6,13 @@ import (
 	"github.com/google/uuid"
 )
 
-func NewMetadata(key string, fileType VirtualFileType, fileMode VirtualFileMode, size int64) *VirtualFileMetadata {
+func NewMetadata(key string, fileMode VirtualFileMode, size int64) *VirtualFileMetadata {
 	now := time.Now()
 	id := genMetadataID()
 
 	return &VirtualFileMetadata{
 		ID:         id,
 		Key:        key,
-		Type:       fileType,
 		Mode:       fileMode,
 		Size:       size,
 		AccessTime: now,
@@ -25,22 +24,17 @@ func NewMetadata(key string, fileType VirtualFileType, fileMode VirtualFileMode,
 
 // NewFileMetadata creates new metadata for a regular file.
 func NewFileMetadata(key string, size int64, mode VirtualFileMode) *VirtualFileMetadata {
-	return NewMetadata(key, FileTypeFile, mode, size)
-}
-
-// NewMountMetadata creates a new inode for a directory.
-func NewMountMetadata() *VirtualFileMetadata {
-	return NewMetadata("", FileTypeMount, ModeDir|0777, 0)
+	return NewMetadata(key, mode, size)
 }
 
 // NewDirectoryMetadata creates a new inode for a directory.
 func NewDirectoryMetadata(key string, mode VirtualFileMode) *VirtualFileMetadata {
-	return NewMetadata(key, FileTypeDirectory, mode|ModeDir, 0)
+	return NewMetadata(key, mode|ModeDir, 0)
 }
 
 // NewSymlinkMetadata creates a new inode for a symbolic link.
 func NewSymlinkMetadata(key string, target string) *VirtualFileMetadata {
-	metadata := NewMetadata(key, FileTypeSymlink, ModeSymlink|0777, 0)
+	metadata := NewMetadata(key, ModeSymlink|0777, 0)
 	metadata.Attributes[AttributeSymlinkTarget] = target
 
 	return metadata

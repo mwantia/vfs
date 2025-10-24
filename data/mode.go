@@ -21,9 +21,28 @@ const (
 )
 
 // IsDir reports whether m describes a directory.
-// It checks if the ModeDir bit is set.
 func (m VirtualFileMode) IsDir() bool {
 	return m&ModeDir != 0
+}
+
+// IsSymlink reports whether m describes a symbolic link.
+func (m VirtualFileMode) IsSymlink() bool {
+	return m&ModeSymlink != 0
+}
+
+// IsNamedPipe reports whether m describes a named pipe.
+func (m VirtualFileMode) IsNamedPipe() bool {
+	return m&ModeNamedPipe != 0
+}
+
+// IsSocket reports whether m describes a socket.
+func (m VirtualFileMode) IsSocket() bool {
+	return m&ModeSocket != 0
+}
+
+// IsDevice reports whether m describes a device.
+func (m VirtualFileMode) IsDevice() bool {
+	return m&ModeDevice != 0
 }
 
 // IsRegular reports whether m describes a regular file.

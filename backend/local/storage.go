@@ -12,7 +12,7 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-func (lb *LocalBackend) CreateObject(ctx context.Context, key string, fileType data.VirtualFileType, fileMode data.VirtualFileMode) (*data.VirtualFileStat, error) {
+func (lb *LocalBackend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -22,7 +22,7 @@ func (lb *LocalBackend) CreateObject(ctx context.Context, key string, fileType d
 		return nil, data.ErrExist
 	}
 
-	if fileMode.IsDir() {
+	if mode.IsDir() {
 		return nil, os.Mkdir(fullPath, 0755)
 	}
 
@@ -35,8 +35,7 @@ func (lb *LocalBackend) CreateObject(ctx context.Context, key string, fileType d
 
 	return &data.VirtualFileStat{
 		Key:  key,
-		Type: fileType,
-		Mode: fileMode,
+		Mode: mode,
 		Size: 0,
 
 		CreateTime: now,

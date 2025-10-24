@@ -9,7 +9,7 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-func (mb *MemoryBackend) CreateObject(ctx context.Context, key string, fileType data.VirtualFileType, fileMode data.VirtualFileMode) (*data.VirtualFileStat, error) {
+func (mb *MemoryBackend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
@@ -31,20 +31,14 @@ func (mb *MemoryBackend) CreateObject(ctx context.Context, key string, fileType 
 			return nil, data.ErrNotExist
 		}
 
-		if !parentMetadata.IsDir() {
+		if !parentMetadata.Mode.IsDir() {
 			return nil, data.ErrNotDirectory
 		}
 	}
 
-	var meta *data.VirtualFileMetadata
-
-	if fileType == data.FileTypeDirectory {
-		meta = data.NewDirectoryMetadata(key, data.ModeDir|0755)
-	} else {
-		meta = data.NewFileMetadata(key, 0, 0644)
-	}
-
+	meta := data.NewFileMetadata(key, 0, mode)
 	stat := meta.ToStat()
+
 	return stat, mb.CreateMeta(ctx, meta)
 }
 
@@ -57,7 +51,7 @@ func (mb *MemoryBackend) ReadObject(ctx context.Context, key string, offset int6
 		return 0, err
 	}
 
-	if meta.IsDir() {
+	if meta.Mode.IsDir() {
 		return 0, data.ErrIsDirectory
 	}
 
@@ -87,7 +81,7 @@ func (mb *MemoryBackend) WriteObject(ctx context.Context, key string, offset int
 		return 0, err
 	}
 
-	if meta.IsDir() {
+	if meta.Mode.IsDir() {
 		return 0, data.ErrIsDirectory
 	}
 
@@ -138,7 +132,7 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, key string, force boo
 		return err
 	}
 
-	if meta.IsDir() {
+	if meta.Mode.IsDir() {
 		// Directories can only be deleted with force=true
 		if !force {
 			return data.ErrIsDirectory
@@ -187,7 +181,7 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	}
 
 	// For files, return single entry
-	if !meta.IsDir() {
+	if !meta.Mode.IsDir() {
 		return []*data.VirtualFileStat{
 			meta.ToStat(),
 		}, nil
@@ -280,7 +274,7 @@ func (mb *MemoryBackend) TruncateObject(ctx context.Context, key string, size in
 		return err
 	}
 
-	if meta.IsDir() {
+	if meta.Mode.IsDir() {
 		return data.ErrIsDirectory
 	}
 

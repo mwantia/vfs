@@ -9,7 +9,7 @@ import (
 type VirtualObjectStorageBackend interface {
 	VirtualBackend
 
-	CreateObject(ctx context.Context, key string, fileType data.VirtualFileType, fileMode data.VirtualFileMode) (*data.VirtualFileStat, error)
+	CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error)
 
 	ReadObject(ctx context.Context, key string, offset int64, data []byte) (int, error)
 

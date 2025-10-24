@@ -68,8 +68,7 @@ func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags data.
 		if err == data.ErrNotExist {
 			// Create file if it doesn't exist and CREATE flag is set
 			if flags.HasCreate() {
-				// TODO :: Find correct filetype and filemode
-				if err := mnt.mount.Create(ctx, relPath, data.FileTypeFile, 0x777); err != nil {
+				if err := mnt.mount.Create(ctx, relPath, 0x777); err != nil {
 					return nil, err
 				}
 				// Refresh info after creation
@@ -89,7 +88,7 @@ func (vfs *VirtualFileSystem) Open(ctx context.Context, path string, flags data.
 			return nil, data.ErrExist
 		}
 
-		if info.IsDir() {
+		if info.Mode.IsDir() {
 			return nil, data.ErrIsDirectory
 		}
 	}
@@ -208,7 +207,7 @@ func (vfs *VirtualFileSystem) MkDir(ctx context.Context, path string) error {
 
 	relPath := ToRelativePath(absPath, entry.path)
 	// Find correct filetype for directory (or universal always the same?)
-	return entry.mount.Create(ctx, relPath, data.FileTypeDirectory, 0x777)
+	return entry.mount.Create(ctx, relPath, data.ModeDir|0x777)
 }
 
 // RmDir removes an empty directory at the specified path.
@@ -259,7 +258,7 @@ func (vfs *VirtualFileSystem) Unlink(ctx context.Context, path string) error {
 		return err
 	}
 
-	if info.IsDir() {
+	if info.Mode.IsDir() {
 		return data.ErrIsDirectory
 	}
 

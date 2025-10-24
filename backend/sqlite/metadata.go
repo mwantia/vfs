@@ -18,7 +18,7 @@ func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileM
 	// Populate unique ID if not already defined
 	if meta.ID == "" {
 		// Use the helper from data package
-		tempMeta := data.NewMetadata(meta.Key, meta.Type, meta.Mode, meta.Size)
+		tempMeta := data.NewMetadata(meta.Key, meta.Mode, meta.Size)
 		meta.ID = tempMeta.ID
 	}
 
@@ -39,9 +39,9 @@ func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileM
 
 	// Insert into database
 	_, err := sb.db.ExecContext(ctx, `
-		INSERT INTO vfs_metadata (id, key, type, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, meta.ID, meta.Key, int(meta.Type), int(meta.Mode), meta.Size,
+		INSERT INTO vfs_metadata (id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, meta.ID, meta.Key, int(meta.Mode), meta.Size,
 		nullInt64(meta.UID), nullInt64(meta.GID),
 		meta.ModifyTime.Unix(), meta.AccessTime.Unix(), meta.CreateTime.Unix(),
 		nullString(meta.ContentType), nullString(meta.ETag), attributesJSON)
@@ -70,9 +70,9 @@ func (sb *SQLiteBackend) ReadMeta(ctx context.Context, key string) (*data.Virtua
 	var modifyTime, accessTime, createTime int64
 
 	err := sb.db.QueryRowContext(ctx, `
-		SELECT id, key, type, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
+		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
 		FROM vfs_metadata WHERE id = ?
-	`, id).Scan(&meta.ID, &meta.Key, &meta.Type, &meta.Mode, &meta.Size,
+	`, id).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
 		&uid, &gid, &modifyTime, &accessTime, &createTime,
 		&contentType, &etag, &attributesJSON)
 
@@ -149,10 +149,10 @@ func (sb *SQLiteBackend) UpdateMeta(ctx context.Context, key string, update *dat
 	// Update database
 	_, err = sb.db.ExecContext(ctx, `
 		UPDATE vfs_metadata
-		SET type = ?, mode = ?, size = ?, uid = ?, gid = ?,
+		SET mode = ?, size = ?, uid = ?, gid = ?,
 		    modify_time = ?, access_time = ?, content_type = ?, etag = ?, attributes = ?
 		WHERE id = ?
-	`, int(meta.Type), int(meta.Mode), meta.Size,
+	`, int(meta.Mode), meta.Size,
 		nullInt64(meta.UID), nullInt64(meta.GID),
 		meta.ModifyTime.Unix(), meta.AccessTime.Unix(),
 		nullString(meta.ContentType), nullString(meta.ETag), attributesJSON, id)
@@ -213,7 +213,7 @@ func (sb *SQLiteBackend) ExistsMeta(ctx context.Context, key string) (bool, erro
 
 func (sb *SQLiteBackend) ReadAllMeta(ctx context.Context) ([]*data.VirtualFileMetadata, error) {
 	rows, err := sb.db.QueryContext(ctx, `
-		SELECT id, key, type, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
+		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
 		FROM vfs_metadata
 	`)
 	if err != nil {
@@ -229,7 +229,7 @@ func (sb *SQLiteBackend) ReadAllMeta(ctx context.Context) ([]*data.VirtualFileMe
 		var attributesJSON sql.NullString
 		var modifyTime, accessTime, createTime int64
 
-		err := rows.Scan(&meta.ID, &meta.Key, &meta.Type, &meta.Mode, &meta.Size,
+		err := rows.Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
 			&uid, &gid, &modifyTime, &accessTime, &createTime,
 			&contentType, &etag, &attributesJSON)
 		if err != nil {

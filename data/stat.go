@@ -14,9 +14,6 @@ type VirtualFileStat struct {
 	// Hash (for sync/dedup)
 	Hash string `json:"hash"`
 
-	// Type of object (file, directory, etc.)
-	Type VirtualFileType `json:"type"`
-
 	// Unix-style mode and permissions
 	Mode VirtualFileMode `json:"mode"`
 
@@ -37,7 +34,6 @@ func (vfs *VirtualFileStat) ToMetadata() *VirtualFileMetadata {
 	return &VirtualFileMetadata{
 		ID:          genMetadataID(),
 		Key:         vfs.Key,
-		Type:        vfs.Type,
 		Mode:        vfs.Mode,
 		Size:        vfs.Size,
 		ModifyTime:  vfs.ModifyTime,

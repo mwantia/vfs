@@ -13,7 +13,6 @@ const (
 	VirtualFileMetadataUpdateKey         VirtualFileMetadataUpdateMask = 1 << iota // Update Relative Path
 	VirtualFileMetadataUpdateStorageHash                                           // Update Storage Hash
 	VirtualFileMetadataUpdateStorageKey                                            // Update Storage Key
-	VirtualFileMetadataUpdateType                                                  // Update File Type
 	VirtualFileMetadataUpdateMode                                                  // Update File Mode (permissions)
 	VirtualFileMetadataUpdateSize                                                  // Update Size
 	VirtualFileMetadataUpdateUID                                                   // Update UID
@@ -37,11 +36,6 @@ func (vfmu *VirtualFileMetadataUpdate) Apply(target *VirtualFileMetadata) (bool,
 
 	if vfmu.Mask&VirtualFileMetadataUpdateKey != 0 {
 		target.Key = vfmu.Metadata.Key
-		modified = true
-	}
-
-	if vfmu.Mask&VirtualFileMetadataUpdateType != 0 {
-		target.Type = vfmu.Metadata.Type
 		modified = true
 	}
 

@@ -69,7 +69,6 @@ func (sb *SQLiteBackend) initSchema() error {
 	CREATE TABLE IF NOT EXISTS vfs_metadata (
 		id TEXT PRIMARY KEY,
 		key TEXT NOT NULL UNIQUE,
-		type INTEGER NOT NULL,
 		mode INTEGER NOT NULL,
 		size INTEGER NOT NULL DEFAULT 0,
 		uid INTEGER,
@@ -82,7 +81,6 @@ func (sb *SQLiteBackend) initSchema() error {
 		attributes TEXT
 	);
 	CREATE INDEX IF NOT EXISTS idx_vfs_metadata_key ON vfs_metadata(key);
-	CREATE INDEX IF NOT EXISTS idx_vfs_metadata_type ON vfs_metadata(type);
 
 	-- Content storage with reference counting
 	CREATE TABLE IF NOT EXISTS vfs_data (

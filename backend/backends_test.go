@@ -214,7 +214,7 @@ func TestAllBackends_NestedPaths(t *testing.T) {
 				tst.Fatalf("Stat nested file failed: %v", err)
 			}
 
-			if info.IsDir() {
+			if info.Mode.IsDir() {
 				tst.Error("Expected file, got directory")
 			}
 
@@ -224,7 +224,7 @@ func TestAllBackends_NestedPaths(t *testing.T) {
 				tst.Fatalf("Stat parent dir failed: %v", err)
 			}
 
-			if !info.IsDir() {
+			if !info.Mode.IsDir() {
 				tst.Error("Expected directory, got file")
 			}
 		})
@@ -333,7 +333,7 @@ func TestAllBackends_StatOperations(t *testing.T) {
 				tst.Errorf("Expected size %d, got %d", len(content), info.Size)
 			}
 
-			if info.IsDir() {
+			if info.Mode.IsDir() {
 				tst.Error("Expected file, got directory")
 			}
 
@@ -347,7 +347,7 @@ func TestAllBackends_StatOperations(t *testing.T) {
 				tst.Fatalf("Stat directory failed: %v", err)
 			}
 
-			if !dirInfo.IsDir() {
+			if !dirInfo.Mode.IsDir() {
 				tst.Error("Expected directory, got file")
 			}
 
