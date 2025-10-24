@@ -1,4 +1,4 @@
-package mounts
+package backend_test
 
 import (
 	"bytes"
@@ -7,41 +7,46 @@ import (
 	"testing"
 
 	"github.com/mwantia/vfs"
+	"github.com/mwantia/vfs/backend"
+	"github.com/mwantia/vfs/backend/memory"
+	"github.com/mwantia/vfs/backend/sqlite"
 	"github.com/mwantia/vfs/data"
-	"github.com/mwantia/vfs/mounts/memory"
+	"github.com/mwantia/vfs/mount"
 )
 
-// TestMountFactory creates a new mount instance for testing.
-type TestMountFactory func(t *testing.T) (vfs.VirtualMount, error)
+// TestBackendFactory creates a new backend instance for testing.
+type TestBackendFactory func(t *testing.T) (backend.VirtualObjectStorageBackend, error)
 
-// GetTestMountFactories returns all mount implementations to test.
-func GetTestMountFactories() map[string]TestMountFactory {
-	return map[string]TestMountFactory{
-		"local": func(t *testing.T) (vfs.VirtualMount, error) {
-			path := t.TempDir()
-			return NewLocal(path), nil
+// GetTestBackendFactories returns all backend implementations to test.
+func GetTestBackendFactories() map[string]TestBackendFactory {
+	return map[string]TestBackendFactory{
+		"memory": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
+			return memory.NewMemoryBackend(""), nil
 		},
-		"sqlite": func(t *testing.T) (vfs.VirtualMount, error) {
-			return NewSQLite(":memory:")
-		},
-		"memory/meta": func(t *testing.T) (vfs.VirtualMount, error) {
-			return memory.NewMetaMemoryMount(), nil
+		"sqlite": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
+			return sqlite.NewSQLiteBackend(":memory:")
 		},
 	}
 }
 
-// TestAllMounts_FileOperations verifies basic file create, write, and read operations
-// across all mount implementations.
-func TestAllMounts_FileOperations(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_FileOperations verifies basic file create, write, and read operations
+// across all backend implementations.
+func TestAllBackends_FileOperations(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -89,25 +94,31 @@ func TestAllMounts_FileOperations(t *testing.T) {
 			}
 
 			// Verify removed
-			if _, err := fs.Stat(ctx, "/test.txt"); err != vfs.ErrNotExist {
+			if _, err := fs.Stat(ctx, "/test.txt"); err != data.ErrNotExist {
 				tst.Errorf("Expected ErrNotExist, got %v", err)
 			}
 		})
 	}
 }
 
-// TestAllMounts_DirectoryOperations verifies directory creation, listing, and removal
-// across all mount implementations.
-func TestAllMounts_DirectoryOperations(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_DirectoryOperations verifies directory creation, listing, and removal
+// across all backend implementations.
+func TestAllBackends_DirectoryOperations(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -153,18 +164,24 @@ func TestAllMounts_DirectoryOperations(t *testing.T) {
 	}
 }
 
-// TestAllMounts_NestedPaths verifies deeply nested directory and file operations
-// across all mount implementations.
-func TestAllMounts_NestedPaths(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_NestedPaths verifies deeply nested directory and file operations
+// across all backend implementations.
+func TestAllBackends_NestedPaths(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -214,18 +231,24 @@ func TestAllMounts_NestedPaths(t *testing.T) {
 	}
 }
 
-// TestAllMounts_ErrorCases verifies proper error handling for invalid operations
-// across all mount implementations.
-func TestAllMounts_ErrorCases(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_ErrorCases verifies proper error handling for invalid operations
+// across all backend implementations.
+func TestAllBackends_ErrorCases(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -234,12 +257,12 @@ func TestAllMounts_ErrorCases(t *testing.T) {
 			defer fs.Unmount(ctx, "/")
 
 			// Stat non-existent file
-			if _, err := fs.Stat(ctx, "/nonexistent"); err != vfs.ErrNotExist {
+			if _, err := fs.Stat(ctx, "/nonexistent"); err != data.ErrNotExist {
 				tst.Errorf("Expected ErrNotExist, got %v", err)
 			}
 
 			// Open non-existent file for reading
-			if _, err := fs.Open(ctx, "/nonexistent", data.AccessModeRead); err != vfs.ErrNotExist {
+			if _, err := fs.Open(ctx, "/nonexistent", data.AccessModeRead); err != data.ErrNotExist {
 				tst.Errorf("Expected ErrNotExist on Open for read, got %v", err)
 			}
 
@@ -261,18 +284,24 @@ func TestAllMounts_ErrorCases(t *testing.T) {
 	}
 }
 
-// TestAllMounts_StatOperations verifies file and directory stat operations
-// across all mount implementations.
-func TestAllMounts_StatOperations(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_StatOperations verifies file and directory stat operations
+// across all backend implementations.
+func TestAllBackends_StatOperations(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -296,8 +325,8 @@ func TestAllMounts_StatOperations(t *testing.T) {
 				tst.Fatalf("Stat failed: %v", err)
 			}
 
-			if info.Name() != "stattest.txt" {
-				tst.Errorf("Expected name 'stattest.txt', got %q", info.Name())
+			if info.Key != "stattest.txt" {
+				tst.Errorf("Expected key 'stattest.txt', got %q", info.Key)
 			}
 
 			if info.Size != int64(len(content)) {
@@ -322,25 +351,31 @@ func TestAllMounts_StatOperations(t *testing.T) {
 				tst.Error("Expected directory, got file")
 			}
 
-			if dirInfo.Name() != "statdir" {
-				tst.Errorf("Expected name 'statdir', got %q", dirInfo.Name())
+			if dirInfo.Key != "statdir" {
+				tst.Errorf("Expected key 'statdir', got %q", dirInfo.Key)
 			}
 		})
 	}
 }
 
-// TestAllMounts_MultipleFiles verifies handling of multiple concurrent files
-// across all mount implementations.
-func TestAllMounts_MultipleFiles(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_MultipleFiles verifies handling of multiple concurrent files
+// across all backend implementations.
+func TestAllBackends_MultipleFiles(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -382,18 +417,24 @@ func TestAllMounts_MultipleFiles(t *testing.T) {
 	}
 }
 
-// TestAllMounts_FileAppend verifies appending to existing files
-// across all mount implementations.
-func TestAllMounts_FileAppend(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_FileAppend verifies appending to existing files
+// across all backend implementations.
+func TestAllBackends_FileAppend(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -434,18 +475,24 @@ func TestAllMounts_FileAppend(t *testing.T) {
 	}
 }
 
-// TestAllMounts_FileTruncate verifies truncating existing files
-// across all mount implementations.
-func TestAllMounts_FileTruncate(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_FileTruncate verifies truncating existing files
+// across all backend implementations.
+func TestAllBackends_FileTruncate(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -486,18 +533,24 @@ func TestAllMounts_FileTruncate(t *testing.T) {
 	}
 }
 
-// TestAllMounts_EmptyDirectory verifies empty directory operations
-// across all mount implementations.
-func TestAllMounts_EmptyDirectory(t *testing.T) {
-	factories := GetTestMountFactories()
+// TestAllBackends_EmptyDirectory verifies empty directory operations
+// across all backend implementations.
+func TestAllBackends_EmptyDirectory(t *testing.T) {
+	factories := GetTestBackendFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
 			fs := vfs.NewVfs()
-			mount, err := factory(t)
+
+			backend, err := factory(t)
 			if err != nil {
-				tst.Fatalf("Init failed: %v", err)
+				tst.Fatalf("Backend init failed: %v", err)
+			}
+
+			mount, err := mount.NewVirtualMount("/", backend)
+			if err != nil {
+				tst.Fatalf("Mount creation failed: %v", err)
 			}
 
 			if err := fs.Mount(ctx, "/", mount); err != nil {
@@ -520,9 +573,8 @@ func TestAllMounts_EmptyDirectory(t *testing.T) {
 				tst.Errorf("Expected 0 entries in empty directory, got %d", len(entries))
 			}
 
-			// Remove empty directory should fail with ErrIsDirectory (proper filesystem semantics)
-			// RmDir internally calls Delete with force=false, which should fail for directories
-			if err := fs.RmDir(ctx, "/emptydir"); err != vfs.ErrIsDirectory {
+			// RmDir should fail with ErrIsDirectory
+			if err := fs.RmDir(ctx, "/emptydir"); err != data.ErrIsDirectory {
 				tst.Errorf("Expected ErrIsDirectory when removing directory, got %v", err)
 			}
 

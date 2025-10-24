@@ -5,11 +5,14 @@ import (
 	"time"
 )
 
-// VirtualStat is a lighter-weight version of VirtualNode and VirtualInode that only includes
-// stat-level information. Useful for operations that don't need full inode details.
-type VirtualStat struct {
-	// Identity - unique identifier
-	Inode string `json:"inode"`
+// VirtualFileStat represents a low-level representation of VirtualFileMetadata.
+// It is also used by VirtualObjectStorageBackend to provide basic metadata for objects.
+type VirtualFileStat struct {
+	// Relative key within the backend
+	Key string `json:"key"`
+
+	// Hash (for sync/dedup)
+	Hash string `json:"hash"`
 
 	// Type of object (file, directory, etc.)
 	Type VirtualFileType `json:"type"`
@@ -20,58 +23,38 @@ type VirtualStat struct {
 	// Size in bytes (0 for directories)
 	Size int64 `json:"size"`
 
-	// Last modification time
 	ModifyTime time.Time `json:"modify_time"`
+	CreateTime time.Time `json:"create_time"`
+
+	// Content MIME type
+	ContentType string `json:"content_type"`
+
+	ETag string `json:"etag"`
 }
 
-// ToStat converts a full VirtualInode to a lightweight stat structure.
-func (vi *VirtualInode) ToStat(path string) *VirtualStat {
-	return &VirtualStat{
-		Inode:      vi.ID,
-		Type:       vi.Type,
-		Mode:       vi.Mode,
-		Size:       vi.Size,
-		ModifyTime: vi.ModifyTime,
-	}
-}
-
-// ToStat converts a full VirtualNode to a lightweight stat structure.
-func (vi *VirtualFileInfo) ToStat(path string) *VirtualStat {
-	return &VirtualStat{
-		Inode:      vi.Inode,
-		Type:       vi.Type,
-		Mode:       vi.Mode,
-		Size:       vi.Size,
-		ModifyTime: vi.ModifyTime,
+// ToMetadata converts VirtualFileStat into a VirtualFileMetadata
+func (vfs *VirtualFileStat) ToMetadata() *VirtualFileMetadata {
+	return &VirtualFileMetadata{
+		ID:          genMetadataID(),
+		Key:         vfs.Key,
+		Type:        vfs.Type,
+		Mode:        vfs.Mode,
+		Size:        vfs.Size,
+		ModifyTime:  vfs.ModifyTime,
+		AccessTime:  time.Now(),
+		CreateTime:  vfs.CreateTime,
+		ContentType: vfs.ContentType,
+		Attributes:  make(map[string]string),
+		ETag:        vfs.ETag,
 	}
 }
 
 // Marshal provides JSON serialization for VirtualInode.
-func (vs *VirtualStat) Marshal() ([]byte, error) {
+func (vs *VirtualFileStat) Marshal() ([]byte, error) {
 	return json.Marshal(vs)
 }
 
 // Unmarshal provides JSON deserialization for VirtualInode.
-func (vs *VirtualStat) Unmarshal(data []byte) error {
+func (vs *VirtualFileStat) Unmarshal(data []byte) error {
 	return json.Unmarshal(data, &vs)
-}
-
-// IsDir returns true if this object is a directory.
-func (vs *VirtualStat) IsDir() bool {
-	return vs.Type == NodeTypeDirectory
-}
-
-// IsFile returns true if this object is a regular file.
-func (vs *VirtualStat) IsFile() bool {
-	return vs.Type == NodeTypeFile
-}
-
-// IsSymlink returns true if this object is a symbolic link.
-func (vs *VirtualStat) IsSymlink() bool {
-	return vs.Type == NodeTypeSymlink
-}
-
-// HasInode returns true if this object has an associated inode.
-func (vs *VirtualStat) HasInode() bool {
-	return vs.Inode != ""
 }

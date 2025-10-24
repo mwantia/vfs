@@ -1,6 +1,9 @@
-package vfs
+package data
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 // Standard VFS errors that Mount implementations should use.
 var (
@@ -10,6 +13,10 @@ var (
 	ErrAlreadyMounted = errors.New("vfs: path already mounted")
 	ErrMountBusy      = errors.New("vfs: mount point busy")
 	ErrNestingDenied  = errors.New("vfs: nesting denied by parent mount")
+
+	// Backend errors
+	ErrBackendUnsupported  = errors.New("vfs: backend capability unsupported")
+	ErrBackendIncompatible = errors.New("vfs: backend incompatible")
 
 	// Mount lifecycle errors
 	ErrMountFailed       = errors.New("vfs: mount initialization failed")
@@ -31,3 +38,30 @@ var (
 	ErrInvalid = errors.New("vfs: invalid argument")
 	ErrInUse   = errors.New("vfs: file already in use")
 )
+
+type Errors struct {
+	mu     sync.RWMutex
+	errors []error
+}
+
+func (e *Errors) Add(err error) {
+	if err == nil {
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.errors = append(e.errors, err)
+}
+
+func (e *Errors) Errors() error {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if len(e.errors) == 0 {
+		return nil
+	}
+
+	return errors.Join(e.errors...)
+}

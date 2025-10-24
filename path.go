@@ -3,12 +3,14 @@ package vfs
 import (
 	"fmt"
 	"strings"
+
+	"github.com/mwantia/vfs/data"
 )
 
 // ToAbsolutePath ensures the path always starts with a leading slash.
 func ToAbsolutePath(path string) (string, error) {
 	if len(path) == 0 {
-		return "", ErrInvalidPath
+		return "", data.ErrInvalidPath
 	}
 
 	if !strings.HasPrefix(path, "/") {

@@ -364,6 +364,43 @@ vfs.ErrClosed          // File already closed
 
 ## Examples
 
+User performs mount operation:
+
+* The primary backend is selected (e.g. `memory`) for `object-storage`
+    * With no other options defined the system assumes `auto` is enabled (default)
+        * If the option `auto` is specifically set to `false` the backend will only be used as `object-storage`
+    * It checks, if the primary backend has the capability to be used as `metadata`
+    * It iterates through all other secondary backends (e.g. `acl`, `cache`, etc.)
+* A primary backend is selected (e.g. `local`) for `object-storage`
+    * Via option `WithMeta()` another backend `sqlite` is added
+    * Since `auto` (by default) is set to `true`, it iterates through all other secondary backends
+        * If `auto` is set to `false` this mount uses `object-storage` and `metadata`
+
+```json
+{
+    "mountpoint": "/mnt",
+    "sync_auto": false,
+    "sync-interval": "5m",
+    "readonly": false,
+    "cache_reads": "0",
+    "cache_writes": "0",
+    "deny_nesting": false
+}
+```
+
+```
+vfs mount /mnt --sync-auto --sync-interval <> --readonly --cache-reads <> --cache-writes <> --deny-nesting  \
+    [all options for backend1] \
+    [all options for backend2]
+```
+
+```go
+primary := s3.NewS3Backend("s3.us-east-2.amazonaws.com", "test", "test123")
+secondary := sqlite.NewSQLiteBackend("./metadata.db")
+
+mnt, _ := vfs.Mount("/mnt", primary, mount.WithMeta(secondary), mount.DisableAuto(), mount.AsReadonly())
+```
+
 ### Example 1: S3 Backend with Streaming
 
 ```go
@@ -505,6 +542,33 @@ func (m *HTTPMount) Read(ctx context.Context, path string, offset int64, data []
 - **Configuration namespaces**: Organize config from multiple sources
 
 ## Design Philosophy
+
+```
+sequenceDiagram
+    participant cli as CLI
+    participant vfs as Virtual Filesystem
+    participant mount as Virtual Mount
+    participant storage as Object Block Storage
+    participant metadata as Metadata Storage
+
+    Note over cli,vfs: User frontend interaction
+    Note over vfs,metadata: Application backend interaction
+
+    cli->>vfs: vfs.Open()
+    vfs->>mount: mount.Stat()
+    alt Metadata exists in Database
+        mount->>metadata: metadata.ReadMeta()
+        metadata-->>mount: VirtualFileMetadata{}
+    else Fallback to Object Storage
+        mount->>storage: storage.HeadObject()
+        storage-->>mount: VirtualFileStat{}
+        alt Storing fileinfo into Metadata
+            mount->>metadata: metadata.CreateMeta()
+        end
+    end
+    mount-->>vfs: VirtualFileMetadata{}
+    vfs-->>cli: NewVirtualFile()
+```
 
 ### Simplicity
 - Small API surface (8 core methods)

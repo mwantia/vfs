@@ -1,55 +1,51 @@
 package data
 
-import "time"
+import (
+	"time"
 
-// NewFileInode creates a new inode for a regular file.
-func NewFileInode(id string, size int64, mode VirtualFileMode) *VirtualInode {
+	"github.com/google/uuid"
+)
+
+func NewMetadata(key string, fileType VirtualFileType, fileMode VirtualFileMode, size int64) *VirtualFileMetadata {
 	now := time.Now()
+	id := genMetadataID()
 
-	return &VirtualInode{
+	return &VirtualFileMetadata{
 		ID:         id,
-		Type:       NodeTypeFile,
-		Mode:       mode,
+		Key:        key,
+		Type:       fileType,
+		Mode:       fileMode,
 		Size:       size,
 		AccessTime: now,
 		ModifyTime: now,
-		ChangeTime: now,
 		CreateTime: now,
-		Metadata:   make(map[string]string),
+		Attributes: make(map[string]string),
 	}
 }
 
-// NewDirectoryInode creates a new inode for a directory.
-func NewDirectoryInode(id string, mode VirtualFileMode) *VirtualInode {
-	now := time.Now()
-
-	return &VirtualInode{
-		ID:         id,
-		Type:       NodeTypeDirectory,
-		Mode:       mode | ModeDir,
-		Size:       0,
-		AccessTime: now,
-		ModifyTime: now,
-		ChangeTime: now,
-		CreateTime: now,
-		Metadata:   make(map[string]string),
-	}
+// NewFileMetadata creates new metadata for a regular file.
+func NewFileMetadata(key string, size int64, mode VirtualFileMode) *VirtualFileMetadata {
+	return NewMetadata(key, FileTypeFile, mode, size)
 }
 
-// NewSymlinkInode creates a new inode for a symbolic link.
-func NewSymlinkInode(id string, target string) *VirtualInode {
-	now := time.Now()
+// NewMountMetadata creates a new inode for a directory.
+func NewMountMetadata() *VirtualFileMetadata {
+	return NewMetadata("", FileTypeMount, ModeDir|0777, 0)
+}
 
-	return &VirtualInode{
-		ID:   id,
-		Type: NodeTypeSymlink,
-		// Symlinks typically have 0777
-		Mode:       ModeSymlink | 0777,
-		Size:       int64(len(target)),
-		AccessTime: now,
-		ModifyTime: now,
-		ChangeTime: now,
-		CreateTime: now,
-		Metadata:   make(map[string]string),
-	}
+// NewDirectoryMetadata creates a new inode for a directory.
+func NewDirectoryMetadata(key string, mode VirtualFileMode) *VirtualFileMetadata {
+	return NewMetadata(key, FileTypeDirectory, mode|ModeDir, 0)
+}
+
+// NewSymlinkMetadata creates a new inode for a symbolic link.
+func NewSymlinkMetadata(key string, target string) *VirtualFileMetadata {
+	metadata := NewMetadata(key, FileTypeSymlink, ModeSymlink|0777, 0)
+	metadata.Attributes[AttributeSymlinkTarget] = target
+
+	return metadata
+}
+
+func genMetadataID() string {
+	return uuid.Must(uuid.NewV7()).String()
 }

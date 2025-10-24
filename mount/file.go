@@ -1,4 +1,4 @@
-package vfs
+package mount
 
 import (
 	"context"
@@ -31,16 +31,27 @@ type VirtualFile interface {
 // virtualFileImpl is the unified implementation for file streams.
 // It supports both read and write operations based on access mode flags.
 type virtualFileImpl struct {
-	vfs     *VirtualFileSystem
-	mount   VirtualMount
-	path    string // Relative path for mount operations
-	absPath string // Absolute path for stream tracking
-	offset  int64
-	flags   data.VirtualAccessMode
-	closed  bool
-
 	mu  sync.RWMutex
 	ctx context.Context
+	//vfs     *VirtualFileSystem
+	mount  *VirtualMount
+	path   string
+	offset int64
+	flags  data.VirtualAccessMode
+	closed bool
+}
+
+func NewVirtualFile(ctx context.Context, mnt *VirtualMount, path string, offset int64, flags data.VirtualAccessMode) VirtualFile {
+	return &virtualFileImpl{
+		// vfs:     vfs,
+		ctx:    ctx,
+		mount:  mnt,
+		path:   path,
+		offset: offset,
+		flags:  flags,
+
+		closed: false,
+	}
 }
 
 // Read reads up to len(p) bytes from the file at the current offset.
@@ -51,11 +62,11 @@ func (vf *virtualFileImpl) Read(p []byte) (n int, err error) {
 	defer vf.mu.Unlock()
 
 	if vf.closed {
-		return 0, ErrClosed
+		return 0, data.ErrClosed
 	}
 
 	if !vf.flags.IsReadOnly() && !vf.flags.IsReadWrite() {
-		return 0, ErrPermission
+		return 0, data.ErrPermission
 	}
 
 	// Check context cancellation
@@ -82,11 +93,11 @@ func (vf *virtualFileImpl) Write(p []byte) (n int, err error) {
 	defer vf.mu.Unlock()
 
 	if vf.closed {
-		return 0, ErrClosed
+		return 0, data.ErrClosed
 	}
 
 	if !vf.flags.IsWriteOnly() && !vf.flags.IsReadWrite() {
-		return 0, ErrPermission
+		return 0, data.ErrPermission
 	}
 
 	// Check context cancellation
@@ -112,7 +123,7 @@ func (vf *virtualFileImpl) Seek(offset int64, whence int) (int64, error) {
 	defer vf.mu.Unlock()
 
 	if vf.closed {
-		return 0, ErrClosed
+		return 0, data.ErrClosed
 	}
 
 	var newOffset int64
@@ -129,11 +140,11 @@ func (vf *virtualFileImpl) Seek(offset int64, whence int) (int64, error) {
 		}
 		newOffset = info.Size + offset
 	default:
-		return 0, ErrInvalid
+		return 0, data.ErrInvalid
 	}
 
 	if newOffset < 0 {
-		return 0, ErrInvalid
+		return 0, data.ErrInvalid
 	}
 
 	vf.offset = newOffset
@@ -146,14 +157,16 @@ func (vf *virtualFileImpl) Close() error {
 	defer vf.mu.Unlock()
 
 	if vf.closed {
-		return ErrClosed
+		return data.ErrClosed
 	}
 
 	vf.closed = true
 
-	vf.vfs.mu.Lock()
-	delete(vf.vfs.streams, vf.absPath)
-	vf.vfs.mu.Unlock()
+	// TODO :: Find a find to delete streams
+
+	// vf.vfs.mu.Lock()
+	// delete(vf.vfs.streams, vf.absPath)
+	// vf.vfs.mu.Unlock()
 
 	return nil
 }
