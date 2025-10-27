@@ -21,7 +21,5 @@ type VirtualMetadataBackend interface {
 
 	ExistsMeta(ctx context.Context, key string) (bool, error)
 
-	ReadAllMeta(ctx context.Context) ([]*data.VirtualFileMetadata, error)
-
-	CreateAllMeta(ctx context.Context, metas []*data.VirtualFileMetadata) error
+	QueryMeta(ctx context.Context, query *MetadataQuery) (*MetadataQueryResult, error)
 }

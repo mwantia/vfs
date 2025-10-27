@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/mwantia/vfs/backend"
 	"github.com/mwantia/vfs/data"
 )
 
@@ -211,17 +214,81 @@ func (sb *SQLiteBackend) ExistsMeta(ctx context.Context, key string) (bool, erro
 	return exists, nil
 }
 
-func (sb *SQLiteBackend) ReadAllMeta(ctx context.Context) ([]*data.VirtualFileMetadata, error) {
-	rows, err := sb.db.QueryContext(ctx, `
-		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
-		FROM vfs_metadata
-	`)
+func (sb *SQLiteBackend) QueryMeta(ctx context.Context, query *backend.MetadataQuery) (*backend.MetadataQueryResult, error) {
+	// Build dynamic SQL query
+	sqlQuery := "SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes FROM vfs_metadata WHERE 1=1"
+	args := []interface{}{}
+
+	// Prefix filter
+	if query.Prefix != "" {
+		if query.Delimiter == "/" {
+			// Only immediate children - exclude nested paths
+			sqlQuery += " AND key LIKE ? AND key NOT LIKE ?"
+			args = append(args, query.Prefix+"%", query.Prefix+"%/%")
+		} else {
+			// Recursive - include all descendants
+			sqlQuery += " AND key LIKE ?"
+			args = append(args, query.Prefix+"%")
+		}
+	}
+
+	// Content type filter
+	if query.ContentType != nil {
+		if strings.Contains(*query.ContentType, "*") {
+			// Wildcard matching: "image/*"
+			pattern := strings.Replace(*query.ContentType, "*", "%", -1)
+			sqlQuery += " AND content_type LIKE ?"
+			args = append(args, pattern)
+		} else {
+			sqlQuery += " AND content_type = ?"
+			args = append(args, *query.ContentType)
+		}
+	}
+
+	// File type filter (check mode bits)
+	if query.FilterType != nil {
+		switch *query.FilterType {
+		case data.FileTypeDir:
+			sqlQuery += " AND (mode & ?) != 0"
+			args = append(args, data.ModeDir)
+		case data.FileTypeRegular:
+			// Regular files have no type bits set
+			allTypeBits := data.ModeDir | data.ModeSymlink | data.ModeNamedPipe | data.ModeSocket | data.ModeDevice | data.ModeCharDevice | data.ModeIrregular
+			sqlQuery += " AND (mode & ?) = 0"
+			args = append(args, allTypeBits)
+		}
+	}
+
+	// Size filters
+	if query.MinSize != nil {
+		sqlQuery += " AND size >= ?"
+		args = append(args, *query.MinSize)
+	}
+	if query.MaxSize != nil {
+		sqlQuery += " AND size <= ?"
+		args = append(args, *query.MaxSize)
+	}
+
+	// Sorting
+	if query.SortBy != "" {
+		sqlQuery += fmt.Sprintf(" ORDER BY %s %s", query.SortBy, query.SortOrder)
+	}
+
+	// Pagination
+	if query.Limit > 0 {
+		sqlQuery += " LIMIT ? OFFSET ?"
+		args = append(args, query.Limit, query.Offset)
+	}
+
+	// Execute query
+	rows, err := sb.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var metas []*data.VirtualFileMetadata
+	// Process results
+	results := make([]*data.VirtualFileMetadata, 0)
 	for rows.Next() {
 		var meta data.VirtualFileMetadata
 		var uid, gid sql.NullInt64
@@ -233,7 +300,7 @@ func (sb *SQLiteBackend) ReadAllMeta(ctx context.Context) ([]*data.VirtualFileMe
 			&uid, &gid, &modifyTime, &accessTime, &createTime,
 			&contentType, &etag, &attributesJSON)
 		if err != nil {
-			continue
+			return nil, err
 		}
 
 		// Convert timestamps
@@ -264,22 +331,19 @@ func (sb *SQLiteBackend) ReadAllMeta(ctx context.Context) ([]*data.VirtualFileMe
 			meta.Attributes = make(map[string]string)
 		}
 
-		metas = append(metas, &meta)
+		results = append(results, &meta)
 	}
 
-	return metas, rows.Err()
-}
-
-func (sb *SQLiteBackend) CreateAllMeta(ctx context.Context, metas []*data.VirtualFileMetadata) error {
-	errs := data.Errors{}
-
-	for _, meta := range metas {
-		if err := sb.CreateMeta(ctx, meta); err != nil {
-			errs.Add(err)
-		}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
-	return errs.Errors()
+	// Return results
+	return &backend.MetadataQueryResult{
+		Candidates: results,
+		TotalCount: len(results),
+		Paginating: query.Limit > 0 && len(results) == query.Limit,
+	}, nil
 }
 
 // Helper functions for nullable fields
