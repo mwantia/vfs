@@ -146,7 +146,7 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, key string, force boo
 
 		// Collect all paths to delete (including this directory)
 		var keysToDelete []string
-		keysToDelete = append(keysToDelete, prefixKey)
+		keysToDelete = append(keysToDelete, key)
 		// Use B-tree range scan to find all children
 		mb.keys.Scan(func(childPath string, _ string) bool {
 			if strings.HasPrefix(childPath, prefixKey) {

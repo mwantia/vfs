@@ -33,7 +33,7 @@ func NewS3Backend(endpoint, bucketName, accessKey, secretKey string, useSsl bool
 }
 
 // Returns the identifier name defined for this backend
-func (*S3Backend) GetName() string {
+func (*S3Backend) Name() string {
 	return "s3"
 }
 

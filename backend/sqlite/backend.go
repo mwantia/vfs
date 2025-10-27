@@ -99,7 +99,7 @@ func (sb *SQLiteBackend) initSchema() error {
 }
 
 // Returns the identifier name defined for this backend
-func (*SQLiteBackend) GetName() string {
+func (*SQLiteBackend) Name() string {
 	return "sqlite"
 }
 

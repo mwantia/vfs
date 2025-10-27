@@ -31,8 +31,8 @@ type VirtualFileMetadata struct {
 	// Size in bytes (0 for directories)
 	Size int64 `json:"size"`
 
-	ModifyTime time.Time `json:"modify_time"`
 	AccessTime time.Time `json:"access_time"`
+	ModifyTime time.Time `json:"modify_time"`
 	CreateTime time.Time `json:"create_time"`
 
 	// User ownership identity

@@ -14,19 +14,22 @@ type MemoryBackend struct {
 
 	keys     *btree.Map[string, string]
 	metadata map[string]*data.VirtualFileMetadata
-	datas    map[string][]byte
+
+	datas       map[string][]byte
+	directories map[string][]string
 }
 
 func NewMemoryBackend(path string) *MemoryBackend {
 	return &MemoryBackend{
-		keys:     btree.NewMap[string, string](0),
-		metadata: make(map[string]*data.VirtualFileMetadata),
-		datas:    make(map[string][]byte),
+		keys:        btree.NewMap[string, string](0),
+		metadata:    make(map[string]*data.VirtualFileMetadata),
+		datas:       make(map[string][]byte),
+		directories: make(map[string][]string),
 	}
 }
 
 // Returns the identifier name defined for this backend
-func (*MemoryBackend) GetName() string {
+func (*MemoryBackend) Name() string {
 	return "memory"
 }
 

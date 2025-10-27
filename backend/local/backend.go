@@ -24,7 +24,7 @@ func NewLocalBackend(path string) *LocalBackend {
 }
 
 // Returns the identifier name defined for this backend
-func (*LocalBackend) GetName() string {
+func (*LocalBackend) Name() string {
 	return "local"
 }
 
