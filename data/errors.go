@@ -25,12 +25,13 @@ var (
 	ErrCircularReference = errors.New("vfs: circular mount reference detected")
 
 	// File operation errors
-	ErrNotExist     = errors.New("vfs: file does not exist")
-	ErrExist        = errors.New("vfs: file already exists")
-	ErrIsDirectory  = errors.New("vfs: is a directory")
-	ErrNotDirectory = errors.New("vfs: not a directory")
-	ErrPermission   = errors.New("vfs: permission denied")
-	ErrReadOnly     = errors.New("vfs: read-only filesystem")
+	ErrNotExist          = errors.New("vfs: file does not exist")
+	ErrExist             = errors.New("vfs: file already exists")
+	ErrIsDirectory       = errors.New("vfs: is a directory")
+	ErrNotDirectory      = errors.New("vfs: not a directory")
+	ErrPermission        = errors.New("vfs: permission denied")
+	ErrReadOnly          = errors.New("vfs: read-only filesystem")
+	ErrDirectoryNotEmpty = errors.New("vfs: directory not empty")
 
 	// I/O errors
 	ErrClosed  = errors.New("vfs: file already closed")
@@ -53,6 +54,10 @@ func (e *Errors) Add(err error) {
 	defer e.mu.Unlock()
 
 	e.errors = append(e.errors, err)
+}
+
+func (e *Errors) Clear() {
+	e.errors = make([]error, 0)
 }
 
 func (e *Errors) Errors() error {

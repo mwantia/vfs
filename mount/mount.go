@@ -2,94 +2,204 @@ package mount
 
 import (
 	"context"
-	"strings"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mwantia/vfs/backend"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/extension/acl"
+	"github.com/mwantia/vfs/extension/cache"
+	"github.com/mwantia/vfs/extension/encrypt"
+	"github.com/mwantia/vfs/extension/multipart"
+	"github.com/mwantia/vfs/extension/rubbish"
+	"github.com/mwantia/vfs/extension/snapshot"
+	"github.com/mwantia/vfs/extension/versioning"
 )
 
-// VirtualMount represents a mounted filesystem.
-// Implementations provide access to a specific storage backend.
-// All paths passed to Mount methods are relative to the mount point.
-type VirtualMount struct {
-	mu   sync.RWMutex
-	path string
+// MountInfo holds configuration and metadata towards the specified mount
+type Mount struct {
+	mu        sync.RWMutex
+	streamers map[string]*MountStreamer
 
-	backends []backend.VirtualBackend
-	options  *VirtualMountOptions
-	storage  backend.VirtualObjectStorageBackend
+	Path      string
+	Options   *MountOptions
+	MountTime time.Time // When the mount was created.
+
+	ObjectStorage backend.VirtualObjectStorageBackend
+	Metadata      backend.VirtualMetadataBackend
+	IsDualMount   bool
+
+	ACL        acl.VirtualAclBackend
+	Cache      cache.VirtualCacheBackend
+	Encrypt    encrypt.VirtualEncryptBackend
+	Multipart  multipart.VirtualMultipartBackend
+	Rubbish    rubbish.VirtualRubbishBackend
+	Snapshot   snapshot.VirtualSnapshotBackend
+	Versioning versioning.VirtualVersioningBackend
 }
 
-func NewVirtualMount(path string, primary backend.VirtualObjectStorageBackend, opts ...VirtualMountOption) (*VirtualMount, error) {
-	// Create default options
-	options := NewDefaultOptions()
+func NewMountInfo(path string, primary backend.VirtualObjectStorageBackend, opts ...MountOption) (*Mount, error) {
+	options := newDefaultMountOptions()
 	for _, opt := range opts {
 		if err := opt(options); err != nil {
 			return nil, err
 		}
 	}
 
-	// Try to automatically identify if the primary backend has additional capabilities
-	if options.Auto {
-		capabilities := primary.GetCapabilities()
+	mnt := &Mount{
+		streamers: make(map[string]*MountStreamer),
 
-		if options.acl == nil && capabilities.Contains(backend.CapabilityACL) {
-			options.acl = primary.(acl.VirtualAclBackend)
+		Path:          path,
+		Options:       options,
+		MountTime:     time.Now(),
+		ObjectStorage: primary,
+	}
+
+	caps := primary.GetCapabilities()
+
+	// Perform capability check for extension ACL
+	if ext, exists := options.Backends[backend.CapabilityACL]; exists {
+		// Type validation for interface
+		acl, ok := ext.(acl.VirtualAclBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for ACL backend", ext.Name())
 		}
-		if options.cache == nil && capabilities.Contains(backend.CapabilityCache) {
-			options.cache = primary.(backend.VirtualMetadataBackend)
+		mnt.ACL = acl
+	} else if options.Auto && caps.Contains(backend.CapabilityACL) {
+		acl, ok := primary.(acl.VirtualAclBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for ACL backend", ext.Name())
 		}
-		if options.encrypt == nil && capabilities.Contains(backend.CapabilityEncrypt) {
-			options.encrypt = primary.(backend.VirtualMetadataBackend)
+		mnt.ACL = acl
+	}
+	// Perform capability check for extension Cache
+	if ext, exists := options.Backends[backend.CapabilityCache]; exists {
+		// Type validation for interface
+		cache, ok := ext.(cache.VirtualCacheBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for Cache backend", ext.Name())
 		}
-		if options.metadata == nil && capabilities.Contains(backend.CapabilityMetadata) {
-			options.metadata = primary.(backend.VirtualMetadataBackend)
+		mnt.Cache = cache
+	} else if options.Auto && caps.Contains(backend.CapabilityCache) {
+		cache, ok := primary.(cache.VirtualCacheBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for Cache backend", ext.Name())
 		}
-		if options.multipart == nil && capabilities.Contains(backend.CapabilityMultipart) {
-			options.multipart = primary.(backend.VirtualMetadataBackend)
+		mnt.Cache = cache
+	}
+	// Perform capability check for extension Encrypt
+	if ext, exists := options.Backends[backend.CapabilityEncrypt]; exists {
+		// Type validation for interface
+		encrypt, ok := ext.(encrypt.VirtualEncryptBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for Encrypt backend", ext.Name())
 		}
-		if options.rubbish == nil && capabilities.Contains(backend.CapabilityRubbish) {
-			options.rubbish = primary.(backend.VirtualMetadataBackend)
+		mnt.Encrypt = encrypt
+	} else if options.Auto && caps.Contains(backend.CapabilityEncrypt) {
+		encrypt, ok := primary.(encrypt.VirtualEncryptBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for Encrypt backend", ext.Name())
 		}
-		if options.snapshot == nil && capabilities.Contains(backend.CapabilitySnapshot) {
-			options.snapshot = primary.(backend.VirtualMetadataBackend)
+		mnt.Encrypt = encrypt
+	}
+	// Perform capability check for extension Metadata
+	if ext, exists := options.Backends[backend.CapabilityMetadata]; exists {
+		// Type validation for interface
+		metadata, ok := ext.(backend.VirtualMetadataBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for Metadata backend", ext.Name())
 		}
-		if options.versioning == nil && capabilities.Contains(backend.CapabilityVersioning) {
-			options.versioning = primary.(backend.VirtualMetadataBackend)
+		mnt.Metadata = metadata
+	} else if options.Auto && caps.Contains(backend.CapabilityMetadata) {
+		metadata, ok := primary.(backend.VirtualMetadataBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for Metadata backend", primary.Name())
+		}
+		mnt.Metadata = metadata
+		// Set IsDualMount to true, since most operations need to be simplified
+		mnt.IsDualMount = true
+	}
+	// Perform capability check for extension Multipart
+	if ext, exists := options.Backends[backend.CapabilityMultipart]; exists {
+		// Type validation for interface
+		multipart, ok := ext.(multipart.VirtualMultipartBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for Multipart backend", ext.Name())
+		}
+		mnt.Multipart = multipart
+	} else if options.Auto && caps.Contains(backend.CapabilityMultipart) {
+		multipart, ok := primary.(multipart.VirtualMultipartBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for Multipart backend", ext.Name())
+		}
+		mnt.Multipart = multipart
+	}
+	// Perform capability check for extension Rubbish
+	if ext, exists := options.Backends[backend.CapabilityRubbish]; exists {
+		// Type validation for interface
+		rubbish, ok := ext.(rubbish.VirtualRubbishBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for Rubbish backend", ext.Name())
+		}
+		mnt.Rubbish = rubbish
+	} else if options.Auto && caps.Contains(backend.CapabilityRubbish) {
+		rubbish, ok := primary.(rubbish.VirtualRubbishBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for Rubbish backend", ext.Name())
+		}
+		mnt.Rubbish = rubbish
+	}
+	// Perform capability check for extension Snapshot
+	if ext, exists := options.Backends[backend.CapabilitySnapshot]; exists {
+		// Type validation for interface
+		snapshot, ok := ext.(snapshot.VirtualSnapshotBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for Snapshot backend", ext.Name())
+		}
+		mnt.Snapshot = snapshot
+	} else if options.Auto && caps.Contains(backend.CapabilitySnapshot) {
+		snapshot, ok := primary.(snapshot.VirtualSnapshotBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for Snapshot backend", ext.Name())
+		}
+		mnt.Snapshot = snapshot
+	}
+	// Perform capability check for extension Versioning
+	if ext, exists := options.Backends[backend.CapabilityVersioning]; exists {
+		// Type validation for interface
+		versioning, ok := ext.(versioning.VirtualVersioningBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for Versioning backend", ext.Name())
+		}
+		mnt.Versioning = versioning
+	} else if options.Auto && caps.Contains(backend.CapabilityVersioning) {
+		versioning, ok := primary.(versioning.VirtualVersioningBackend)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for Versioning backend", ext.Name())
+		}
+		mnt.Versioning = versioning
+	}
+
+	if !mnt.IsDualMount {
+		primaryAsMetadata, ok := primary.(backend.VirtualMetadataBackend)
+		// Additional fallback check and validation
+		// Occurs if primary and metadata are defined manually
+		if ok && primaryAsMetadata == mnt.Metadata {
+			mnt.IsDualMount = true
 		}
 	}
 
-	// Get unique backends to avoid calling Close() multiple times on same instance
-	uniques := getUniqueBackends([]backend.VirtualBackend{
-		primary,
-		options.acl,
-		options.cache,
-		options.encrypt,
-		options.metadata,
-		options.multipart,
-		options.rubbish,
-		options.snapshot,
-		options.versioning,
-	})
-
-	return &VirtualMount{
-		path:     path,
-		backends: uniques,
-		options:  options,
-		storage:  primary,
-	}, nil
+	return mnt, nil
 }
 
-// Mount
-func (vm *VirtualMount) Mount(ctx context.Context) error {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
+func (m *Mount) Mount(ctx context.Context) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	errs := data.Errors{}
-
-	for _, vb := range vm.backends {
+	// Open all backends/extensions set to this mount
+	for _, vb := range m.getUniqueBackends() {
 		if err := vb.Open(ctx); err != nil {
 			errs.Add(err)
 		}
@@ -98,14 +208,34 @@ func (vm *VirtualMount) Mount(ctx context.Context) error {
 	return errs.Errors()
 }
 
-// Unmount
-func (vm *VirtualMount) Unmount(ctx context.Context) error {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
+func (m *Mount) Unmount(ctx context.Context, force bool) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if !force {
+		// Initial check, to see if we have any busy streamers
+		for _, streamer := range m.streamers {
+			if streamer.IsBusy() {
+				// Fail, since we shouldn't unmount busy backends
+				return data.ErrBusy
+			}
+		}
+	}
+
+	for _, streamer := range m.streamers {
+		if streamer.IsBusy() && !force {
+			return data.ErrBusy
+		} else {
+			// Close the streamer
+			if err := streamer.Close(); err != nil {
+				return err
+			}
+		}
+	}
 
 	errs := data.Errors{}
-
-	for _, vb := range vm.backends {
+	// Open all backends/extensions set to this mount
+	for _, vb := range m.getUniqueBackends() {
 		if err := vb.Close(ctx); err != nil {
 			errs.Add(err)
 		}
@@ -114,341 +244,58 @@ func (vm *VirtualMount) Unmount(ctx context.Context) error {
 	return errs.Errors()
 }
 
-// Stat returns information about a virtual object.
-// Returns ErrNotExist if the path doesn't exist.
-func (vm *VirtualMount) Stat(ctx context.Context, path string) (*data.VirtualFileMetadata, error) {
-	vm.mu.RLock()
-	defer vm.mu.RUnlock()
-	// Load relative path by stripping the mountpoint as key
-	key := vm.toRelativePath(path)
-	// Try metadata first if available
-	if vm.options.metadata != nil {
-		meta, err := vm.options.metadata.ReadMeta(ctx, key)
-		if err != nil {
-			return nil, err
-		}
+func (m *Mount) GetStreamer(path string) (Streamer, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-		return meta, nil
-	}
-	// Fallback to storage to create metadata from object
-	stat, err := vm.storage.HeadObject(ctx, key)
-	if err != nil {
-		return nil, err
+	streamer, exists := m.streamers[path]
+	if !exists {
+		return nil, false
 	}
 
-	meta := stat.ToMetadata()
-	// Sync to metadata if available AND it's a separate backend instance
-	if vm.options.metadata != nil && !vm.isStorageAlsoMetadata() {
-		if err := vm.options.metadata.CreateMeta(ctx, meta); err != nil {
-			return nil, err
-		}
-	}
-
-	return meta, nil
+	return streamer, true
 }
 
-// List returns all virtual objects under the given path.
-// For directories, returns all direct children.
-// For files, returns single entry with the file's info.
-// Returns ErrNotExist if the path doesn't exist.
-func (vm *VirtualMount) List(ctx context.Context, path string) ([]*data.VirtualFileMetadata, error) {
-	vm.mu.RLock()
-	defer vm.mu.RUnlock()
+func (m *Mount) OpenStreamer(ctx context.Context, path string, offset int64, flags data.VirtualAccessMode) Streamer {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	key := vm.toRelativePath(path)
+	streamer := newMountStreamer(ctx, m, path, offset, flags)
+	m.streamers[path] = streamer
 
-	// Try metadata backend first if available
-	if vm.options.metadata != nil {
-		meta, err := vm.options.metadata.ReadMeta(ctx, key)
-		if err != nil {
-			return nil, err
-		}
-
-		// For non-directories, return single entry
-		if !meta.Mode.IsDir() {
-			return []*data.VirtualFileMetadata{meta}, nil
-		}
-
-		// For directories, we need to query all children
-		// This is implementation-dependent, so we fall back to storage
-	}
-
-	// Use storage backend to list objects
-	stats, err := vm.storage.ListObjects(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert stats to metadata
-	result := make([]*data.VirtualFileMetadata, 0, len(stats))
-	for _, stat := range stats {
-		meta := stat.ToMetadata()
-
-		// Sync to metadata if available AND it's a separate backend instance
-		if vm.options.metadata != nil && !vm.isStorageAlsoMetadata() {
-			if err := vm.options.metadata.CreateMeta(ctx, meta); err != nil {
-				// Ignore errors for existing metadata
-				continue
-			}
-		}
-
-		result = append(result, meta)
-	}
-
-	return result, nil
+	return streamer
 }
 
-// Read reads up to len(data) bytes from the object at path starting at offset.
-// Returns the number of bytes read and any error encountered.
-// Returns ErrNotExist if the path doesn't exist.
-// Returns ErrIsDirectory if the path is a directory.
-// If offset is beyond the file size, returns 0, io.EOF.
-func (vm *VirtualMount) Read(ctx context.Context, path string, offset int64, dat []byte) (int, error) {
-	vm.mu.RLock()
-	defer vm.mu.RUnlock()
+func (m *Mount) CloseStreamer(ctx context.Context, path string, force bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	key := vm.toRelativePath(path)
+	streamer, exists := m.streamers[path]
+	if !exists {
+		return data.ErrNotExist
+	}
 
-	// Delegate to storage backend
-	return vm.storage.ReadObject(ctx, key, offset, dat)
+	if streamer.IsBusy() && !force {
+		return data.ErrBusy
+	}
+
+	return streamer.Close()
 }
 
-// Write writes data to the object at path starting at offset.
-// If offset is beyond current file size, the gap is filled with zeros.
-// Returns the number of bytes written and any error encountered.
-// Returns ErrNotExist if the path doesn't exist (use Create first).
-// Returns ErrIsDirectory if the path is a directory.
-func (vm *VirtualMount) Write(ctx context.Context, path string, offset int64, dat []byte) (int, error) {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-
-	key := vm.toRelativePath(path)
-
-	// Validate using metadata first if available
-	if vm.options.metadata != nil {
-		meta, err := vm.options.metadata.ReadMeta(ctx, key)
-		if err != nil {
-			// Metadata doesn't exist - try to populate from storage
-			stat, statErr := vm.storage.HeadObject(ctx, key)
-			if statErr != nil {
-				return 0, statErr
-			}
-			// Create metadata from storage (only if separate backend)
-			meta = stat.ToMetadata()
-			if !vm.isStorageAlsoMetadata() {
-				if createErr := vm.options.metadata.CreateMeta(ctx, meta); createErr != nil {
-					return 0, createErr
-				}
-			}
-		}
-
-		// Validate it's not a directory
-		if meta.Mode.IsDir() {
-			return 0, data.ErrIsDirectory
-		}
+// getUniqueBackends returns a list of unique backends without duplicates
+func (m *Mount) getUniqueBackends() []backend.VirtualBackend {
+	// Create list of all available backends
+	backends := []backend.VirtualBackend{
+		m.ObjectStorage,
+		m.ACL,
+		m.Cache,
+		m.Encrypt,
+		m.Metadata,
+		m.Multipart,
+		m.Rubbish,
+		m.Snapshot,
+		m.Versioning,
 	}
-
-	// Write to storage backend
-	n, err := vm.storage.WriteObject(ctx, key, offset, dat)
-	if err != nil {
-		return n, err
-	}
-
-	// Sync metadata after successful write (only if separate backend)
-	if vm.options.metadata != nil && !vm.isStorageAlsoMetadata() {
-		writeEnd := offset + int64(n)
-		// Get updated stat from storage to ensure accuracy
-		stat, statErr := vm.storage.HeadObject(ctx, key)
-		if statErr == nil {
-			update := &data.VirtualFileMetadataUpdate{
-				Mask: data.VirtualFileMetadataUpdateSize,
-				Metadata: &data.VirtualFileMetadata{
-					Size: stat.Size,
-				},
-			}
-			// Update metadata (ModifyTime will be set automatically)
-			vm.options.metadata.UpdateMeta(ctx, key, update)
-		} else {
-			// Fallback: calculate size from write
-			update := &data.VirtualFileMetadataUpdate{
-				Mask: data.VirtualFileMetadataUpdateSize,
-				Metadata: &data.VirtualFileMetadata{
-					Size: writeEnd,
-				},
-			}
-			vm.options.metadata.UpdateMeta(ctx, key, update)
-		}
-	}
-
-	return n, nil
-}
-
-// Create creates a new file or directory at the given path.
-// For files, isDir should be false. For directories, isDir should be true.
-// Returns ErrExist if the path already exists.
-// Parent directories are NOT created automatically - they must exist.
-func (vm *VirtualMount) Create(ctx context.Context, path string, fileMode data.VirtualFileMode) error {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-
-	key := vm.toRelativePath(path)
-
-	// Check if already exists in metadata
-	if vm.options.metadata != nil {
-		if exists, _ := vm.options.metadata.ExistsMeta(ctx, key); exists {
-			return data.ErrExist
-		}
-	}
-
-	// Create in storage backend
-	stat, err := vm.storage.CreateObject(ctx, key, fileMode)
-	if err != nil {
-		return err
-	}
-
-	// Sync to metadata if available AND it's a separate backend instance
-	if vm.options.metadata != nil && !vm.isStorageAlsoMetadata() {
-		meta := stat.ToMetadata()
-		if err := vm.options.metadata.CreateMeta(ctx, meta); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// Delete removes the object at the given path.
-// If force is true and the object is a directory, removes all children recursively.
-// If force is false and the directory is not empty, returns an error.
-// Returns ErrNotExist if the path doesn't exist.
-func (vm *VirtualMount) Delete(ctx context.Context, path string, force bool) error {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-
-	key := vm.toRelativePath(path)
-
-	// Validate existence in metadata if available
-	if vm.options.metadata != nil {
-		if exists, _ := vm.options.metadata.ExistsMeta(ctx, key); !exists {
-			// Try storage as fallback
-			if _, err := vm.storage.HeadObject(ctx, key); err != nil {
-				return data.ErrNotExist
-			}
-		}
-	}
-
-	// Delete from storage backend
-	if err := vm.storage.DeleteObject(ctx, key, force); err != nil {
-		return err
-	}
-
-	// Sync deletion to metadata if available (only if separate backend)
-	if vm.options.metadata != nil && !vm.isStorageAlsoMetadata() {
-		// For directories with force=true, we need to delete all child metadata
-		if force {
-			// Get the metadata to check if it's a directory
-			meta, err := vm.options.metadata.ReadMeta(ctx, key)
-			if err == nil && meta.Mode.IsDir() {
-				// Delete all child metadata entries
-				// This is backend-specific, so we just delete the parent for now
-				// The backend should handle cascading deletes
-				vm.options.metadata.DeleteMeta(ctx, key)
-			}
-		} else {
-			vm.options.metadata.DeleteMeta(ctx, key)
-		}
-	}
-
-	return nil
-}
-
-// Truncate changes the size of the file at path.
-// If the file is larger than size, the extra data is discarded.
-// If the file is smaller than size, it is extended with zero bytes.
-// Returns ErrNotExist if the path doesn't exist.
-// Returns ErrIsDirectory if the path is a directory.
-func (vm *VirtualMount) Truncate(ctx context.Context, path string, size int64) error {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-
-	key := vm.toRelativePath(path)
-
-	// Validate using metadata first if available
-	if vm.options.metadata != nil {
-		meta, err := vm.options.metadata.ReadMeta(ctx, key)
-		if err != nil {
-			// Metadata doesn't exist - try to populate from storage
-			stat, statErr := vm.storage.HeadObject(ctx, key)
-			if statErr != nil {
-				return statErr
-			}
-			// Create metadata from storage (only if separate backend)
-			meta = stat.ToMetadata()
-			if !vm.isStorageAlsoMetadata() {
-				if createErr := vm.options.metadata.CreateMeta(ctx, meta); createErr != nil {
-					return createErr
-				}
-			}
-		}
-
-		// Validate it's not a directory
-		if meta.Mode.IsDir() {
-			return data.ErrIsDirectory
-		}
-	}
-
-	// Truncate in storage backend
-	if err := vm.storage.TruncateObject(ctx, key, size); err != nil {
-		return err
-	}
-
-	// Sync metadata after successful truncate (only if separate backend)
-	if vm.options.metadata != nil && !vm.isStorageAlsoMetadata() {
-		update := &data.VirtualFileMetadataUpdate{
-			Mask: data.VirtualFileMetadataUpdateSize,
-			Metadata: &data.VirtualFileMetadata{
-				Size: size,
-			},
-		}
-		if err := vm.options.metadata.UpdateMeta(ctx, key, update); err != nil {
-			// Log but continue - metadata sync is not critical
-			return nil
-		}
-	}
-
-	return nil
-}
-
-// toRelativePath removes the prefix from path.
-// Returns the relative path after the prefix.
-// It additionally removes any leading slashes.
-func (vm *VirtualMount) toRelativePath(path string) string {
-	if vm.path == "" {
-		return path
-	}
-
-	if path == vm.path {
-		return ""
-	}
-
-	relPath := strings.TrimPrefix(path, vm.path)
-	return strings.TrimPrefix(relPath, "/")
-}
-
-// isStorageAlsoMetadata checks if the storage backend is also the metadata backend (same instance).
-// Returns true if both capabilities are provided by the same backend instance.
-func (vm *VirtualMount) isStorageAlsoMetadata() bool {
-	if vm.options.metadata == nil {
-		return false
-	}
-	storageAsMetadata, ok := vm.storage.(backend.VirtualMetadataBackend)
-	return ok && storageAsMetadata == vm.options.metadata
-}
-
-// getUniqueBackends collects all backends and deduplicates them to ensure
-// each unique backend instance is only returned once, even if assigned to
-// multiple roles (e.g., storage backend also serving as metadata backend).
-func getUniqueBackends(backends []backend.VirtualBackend) []backend.VirtualBackend {
 	// Use map to track unique backend pointers
 	seen := make(map[backend.VirtualBackend]struct{})
 	// Helper to add backend if not nil and not already seen
