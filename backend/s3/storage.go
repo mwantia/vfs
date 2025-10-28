@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"path"
 	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/data/errors"
 )
 
 func (sb *S3Backend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
@@ -197,7 +197,7 @@ func (sb *S3Backend) DeleteObject(ctx context.Context, key string, force bool) e
 			objectsToDelete = append(objectsToDelete, object)
 		}
 
-		errs := data.Errors{}
+		errs := errors.Errors{}
 		// Delete all objects
 		for _, obj := range objectsToDelete {
 			if err := sb.client.RemoveObject(ctx, sb.bucketName, obj.Key, minio.RemoveObjectOptions{}); err != nil {
@@ -216,53 +216,62 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
-	// First check if the key itself is an object
-	objInfo, err := sb.client.StatObject(ctx, sb.bucketName, key, minio.StatObjectOptions{})
-	if err == nil {
-		// Object exists
-		isDir := strings.HasSuffix(objInfo.Key, "/") || objInfo.ContentType == "application/x-directory"
+	// For non-empty keys, check if the key itself is an object
+	var err error
+	if key != "" {
+		objInfo, statErr := sb.client.StatObject(ctx, sb.bucketName, key, minio.StatObjectOptions{})
+		if statErr == nil {
+			// Object exists
+			isDir := strings.HasSuffix(objInfo.Key, "/") || objInfo.ContentType == "application/x-directory"
 
-		if !isDir {
-			// It's a file, return just this object
-			return []*data.VirtualFileStat{
-				sb.toVirtualFileStat(key, objInfo),
-			}, nil
-		}
-
-		// It's a directory, list its contents
-		prefix := key
-		if !strings.HasSuffix(prefix, "/") {
-			prefix += "/"
-		}
-
-		// List objects with delimiter to get only direct children
-		objectsCh := sb.client.ListObjects(ctx, sb.bucketName, minio.ListObjectsOptions{
-			Prefix:    prefix,
-			Recursive: false,
-		})
-
-		var stats []*data.VirtualFileStat
-		for object := range objectsCh {
-			if object.Err != nil {
-				return nil, object.Err
+			if !isDir {
+				// It's a file, return just this object
+				return []*data.VirtualFileStat{
+					sb.toVirtualFileStat(key, objInfo),
+				}, nil
 			}
 
-			// Skip the directory object itself
-			if object.Key == prefix {
-				continue
+			// It's a directory, list its contents
+			prefix := key
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
 			}
 
-			// Get relative key (remove prefix)
-			relKey := strings.TrimPrefix(object.Key, prefix)
-			stats = append(stats, sb.toVirtualFileStat(relKey, object))
-		}
+			// List objects with delimiter to get only direct children
+			objectsCh := sb.client.ListObjects(ctx, sb.bucketName, minio.ListObjectsOptions{
+				Prefix:    prefix,
+				Recursive: false,
+			})
 
-		return stats, nil
+			var stats []*data.VirtualFileStat
+			for object := range objectsCh {
+				if object.Err != nil {
+					return nil, object.Err
+				}
+
+				// Skip the directory object itself
+				if object.Key == prefix {
+					continue
+				}
+
+				// Get relative key (remove prefix)
+				relKey := strings.TrimPrefix(object.Key, prefix)
+
+				// Skip if relative key is empty (shouldn't happen, but be defensive)
+				if relKey == "" {
+					continue
+				}
+
+				stats = append(stats, sb.toVirtualFileStat(relKey, object))
+			}
+
+			return stats, nil
+		}
+		err = statErr
 	}
 
-	// Object doesn't exist, might be an implicit directory
-	errResponse := minio.ToErrorResponse(err)
-	if errResponse.Code == "NoSuchKey" {
+	// Object doesn't exist (or key is empty for root), treat as implicit directory
+	if key == "" || (err != nil && minio.ToErrorResponse(err).Code == "NoSuchKey") {
 		// Try listing with prefix to see if there are objects under this path
 		prefix := key
 		if key != "" && !strings.HasSuffix(key, "/") {
@@ -284,6 +293,12 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 
 			hasObjects = true
 			relKey := strings.TrimPrefix(object.Key, prefix)
+
+			// Skip if relative key is empty (directory object itself)
+			if relKey == "" {
+				continue
+			}
+
 			stats = append(stats, sb.toVirtualFileStat(relKey, object))
 		}
 
@@ -300,6 +315,17 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 func (sb *S3Backend) HeadObject(ctx context.Context, key string) (*data.VirtualFileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
+
+	// Handle empty key (root of bucket) - return synthetic directory stat
+	if key == "" {
+		return &data.VirtualFileStat{
+			Key:        "",
+			Size:       0,
+			Mode:       data.ModeDir | 0755,
+			ModifyTime: time.Now(),
+			CreateTime: time.Now(),
+		}, nil
+	}
 
 	objInfo, err := sb.client.StatObject(ctx, sb.bucketName, key, minio.StatObjectOptions{})
 	if err != nil {
@@ -388,14 +414,8 @@ func (sb *S3Backend) toVirtualFileStat(key string, objInfo minio.ObjectInfo) *da
 		key = strings.TrimSuffix(key, "/")
 	}
 
-	// Extract just the base name for the key (last path component)
-	baseName := path.Base(key)
-	if baseName == "." || baseName == "/" {
-		baseName = key
-	}
-
 	return &data.VirtualFileStat{
-		Key:        baseName,
+		Key:        key,
 		Size:       objInfo.Size,
 		Mode:       virtMode,
 		ModifyTime: objInfo.LastModified,

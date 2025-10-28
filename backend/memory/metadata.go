@@ -137,16 +137,26 @@ func (mb *MemoryBackend) ExistsMeta(ctx context.Context, key string) (bool, erro
 func (mb *MemoryBackend) QueryMeta(ctx context.Context, query *backend.MetadataQuery) (*backend.MetadataQueryResult, error) {
 	var candidates []*data.VirtualFileMetadata
 
-	if query.Prefix != "" && query.Delimiter == "/" {
-		// Fast path: use pre-computed directory index
-		if children, ok := mb.directories[query.Prefix]; ok {
-			for _, key := range children {
-				id, _ := mb.keys.Get(key)
-				candidates = append(candidates, mb.metadata[id])
+	if query.Delimiter == "/" {
+		// Delimiter mode: return only direct children
+		if query.Prefix != "" {
+			// Non-empty prefix: use pre-computed directory index
+			if children, ok := mb.directories[query.Prefix]; ok {
+				for _, key := range children {
+					id, _ := mb.keys.Get(key)
+					candidates = append(candidates, mb.metadata[id])
+				}
+			}
+		} else {
+			// Empty prefix (root): return only top-level entries (no "/" in key)
+			for _, meta := range mb.metadata {
+				if !strings.Contains(meta.Key, "/") {
+					candidates = append(candidates, meta)
+				}
 			}
 		}
 	} else {
-		// Fallback: scan all metadatas
+		// No delimiter: return all entries matching prefix (recursive)
 		for _, meta := range mb.metadata {
 			if query.Prefix == "" || strings.HasPrefix(meta.Key, query.Prefix) {
 				candidates = append(candidates, meta)

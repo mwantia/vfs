@@ -219,17 +219,25 @@ func (sb *SQLiteBackend) QueryMeta(ctx context.Context, query *backend.MetadataQ
 	sqlQuery := "SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes FROM vfs_metadata WHERE 1=1"
 	args := []interface{}{}
 
-	// Prefix filter
-	if query.Prefix != "" {
-		if query.Delimiter == "/" {
-			// Only immediate children - exclude nested paths
+	// Prefix and delimiter filter
+	if query.Delimiter == "/" {
+		if query.Prefix != "" {
+			// Only immediate children under prefix - exclude nested paths
 			sqlQuery += " AND key LIKE ? AND key NOT LIKE ?"
 			args = append(args, query.Prefix+"%", query.Prefix+"%/%")
 		} else {
-			// Recursive - include all descendants
+			// Root level only - no slashes in key
+			sqlQuery += " AND key NOT LIKE ?"
+			args = append(args, "%/%")
+		}
+	} else {
+		// No delimiter: recursive listing
+		if query.Prefix != "" {
+			// Recursive - include all descendants matching prefix
 			sqlQuery += " AND key LIKE ?"
 			args = append(args, query.Prefix+"%")
 		}
+		// If no prefix and no delimiter, return all (no additional filter)
 	}
 
 	// Content type filter

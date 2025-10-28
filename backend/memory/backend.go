@@ -19,7 +19,7 @@ type MemoryBackend struct {
 	directories map[string][]string
 }
 
-func NewMemoryBackend(path string) *MemoryBackend {
+func NewMemoryBackend() *MemoryBackend {
 	return &MemoryBackend{
 		keys:        btree.NewMap[string, string](0),
 		metadata:    make(map[string]*data.VirtualFileMetadata),

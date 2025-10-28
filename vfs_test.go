@@ -8,6 +8,7 @@ import (
 
 	"github.com/mwantia/vfs"
 	"github.com/mwantia/vfs/backend"
+	"github.com/mwantia/vfs/backend/local"
 	"github.com/mwantia/vfs/backend/memory"
 	"github.com/mwantia/vfs/backend/sqlite"
 	"github.com/mwantia/vfs/data"
@@ -20,10 +21,13 @@ type TestBackendFactory func(t *testing.T) (backend.VirtualObjectStorageBackend,
 func GetTestBackendFactories() map[string]TestBackendFactory {
 	return map[string]TestBackendFactory{
 		"memory": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
-			return memory.NewMemoryBackend(""), nil
+			return memory.NewMemoryBackend(), nil
 		},
 		"sqlite": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
 			return sqlite.NewSQLiteBackend(":memory:")
+		},
+		"local": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
+			return local.NewLocalBackend(t.TempDir()), nil
 		},
 	}
 }
@@ -36,7 +40,7 @@ func TestAllBackends_FileOperations(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -103,7 +107,7 @@ func TestAllBackends_DirectoryOperations(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -161,7 +165,7 @@ func TestAllBackends_NestedPaths(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -223,7 +227,7 @@ func TestAllBackends_ErrorCases(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -271,7 +275,7 @@ func TestAllBackends_StatOperations(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -340,7 +344,7 @@ func TestAllBackends_MultipleFiles(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -394,7 +398,7 @@ func TestAllBackends_FileAppend(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -447,7 +451,7 @@ func TestAllBackends_FileTruncate(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -500,7 +504,7 @@ func TestAllBackends_EmptyDirectory(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs := vfs.NewVfs()
+			fs, _ := vfs.NewVfs()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -539,5 +543,42 @@ func TestAllBackends_EmptyDirectory(t *testing.T) {
 				tst.Fatalf("failed to unmount primary backend: %v", err)
 			}
 		})
+	}
+}
+
+// TestVFS_CloseMethod verifies that the Close method properly unmounts all filesystems
+func TestVFS_CloseMethod(t *testing.T) {
+	ctx := t.Context()
+	fs, _ := vfs.NewVfs()
+
+	// Mount multiple backends
+	if err := fs.Mount(ctx, "/", memory.NewMemoryBackend()); err != nil {
+		t.Fatalf("Failed to mount root: %v", err)
+	}
+
+	if err := fs.Mount(ctx, "/data", memory.NewMemoryBackend()); err != nil {
+		t.Fatalf("Failed to mount /data: %v", err)
+	}
+
+	if err := fs.Mount(ctx, "/data/nested", memory.NewMemoryBackend()); err != nil {
+		t.Fatalf("Failed to mount /data/nested: %v", err)
+	}
+
+	// Create some files to ensure backends are working
+	f, err := fs.OpenFile(ctx, "/test.txt", data.AccessModeWrite|data.AccessModeCreate)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	f.Close()
+
+	// Close should unmount all filesystems
+	if err := fs.Close(ctx); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// After close, operations should fail because nothing is mounted
+	_, err = fs.StatMetadata(ctx, "/test.txt")
+	if err == nil {
+		t.Error("Expected error after Close, but operation succeeded")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/data/errors"
 )
 
 func (mb *MemoryBackend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
@@ -156,7 +157,7 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, key string, force boo
 			return true
 		})
 
-		errs := data.Errors{}
+		errs := errors.Errors{}
 
 		// Delete all collected paths
 		for _, delKey := range keysToDelete {
@@ -175,16 +176,19 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	mb.mu.RLock()
 	defer mb.mu.RUnlock()
 
-	meta, err := mb.ReadMeta(ctx, key)
-	if err != nil {
-		return nil, err
-	}
+	// For root directory, skip the existence check - root is implicit
+	if key != "" {
+		meta, err := mb.ReadMeta(ctx, key)
+		if err != nil {
+			return nil, err
+		}
 
-	// For files, return single entry
-	if !meta.Mode.IsDir() {
-		return []*data.VirtualFileStat{
-			meta.ToStat(),
-		}, nil
+		// For files, return single entry
+		if !meta.Mode.IsDir() {
+			return []*data.VirtualFileStat{
+				meta.ToStat(),
+			}, nil
+		}
 	}
 
 	// For directories, use B-tree range scan to find children

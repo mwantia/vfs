@@ -1,16 +1,16 @@
-package vfs
+package data
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/data/errors"
 )
 
 // ToAbsolutePath ensures the path always starts with a leading slash.
 func ToAbsolutePath(path string) (string, error) {
 	if len(path) == 0 {
-		return "", data.ErrInvalidPath
+		return "", errors.InvalidPath(nil, path)
 	}
 
 	if !strings.HasPrefix(path, "/") {
@@ -36,9 +36,9 @@ func ToRelativePath(path, prefix string) string {
 	return strings.TrimPrefix(relPath, "/")
 }
 
-// hasPrefix checks if path has the given prefix.
+// HasPrefix checks if path has the given prefix.
 // Both paths should be cleaned before calling.
-func hasPrefix(path, prefix string) bool {
+func HasPrefix(path, prefix string) bool {
 	// Root matches everything
 	if prefix == "" {
 		return true

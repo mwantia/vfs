@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/data/errors"
 )
 
 func (sb *SQLiteBackend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
@@ -202,7 +203,7 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, key string, force boo
 			return true
 		})
 
-		errs := data.Errors{}
+		errs := errors.Errors{}
 
 		// Delete all collected paths
 		for _, delKey := range keysToDelete {
@@ -221,16 +222,19 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
-	meta, err := sb.ReadMeta(ctx, key)
-	if err != nil {
-		return nil, err
-	}
+	// For root directory, skip the existence check - root is implicit
+	if key != "" {
+		meta, err := sb.ReadMeta(ctx, key)
+		if err != nil {
+			return nil, err
+		}
 
-	// For files, return single entry
-	if !meta.Mode.IsDir() {
-		return []*data.VirtualFileStat{
-			meta.ToStat(),
-		}, nil
+		// For files, return single entry
+		if !meta.Mode.IsDir() {
+			return []*data.VirtualFileStat{
+				meta.ToStat(),
+			}, nil
+		}
 	}
 
 	// For directories, use B-tree range scan to find children

@@ -15,6 +15,7 @@ const (
 	ModeDevice     VirtualFileMode = 1 << 27 // D: device file
 	ModeCharDevice VirtualFileMode = 1 << 26 // c: Unix character device
 	ModeIrregular  VirtualFileMode = 1 << 25 // ?: non-regular file
+	ModeMount      VirtualFileMode = 1 << 24 // M: mount point (virtual directory)
 
 	// Permission bits
 	ModePerm VirtualFileMode = 0777 // Unix permission bits
@@ -45,10 +46,15 @@ func (m VirtualFileMode) IsDevice() bool {
 	return m&ModeDevice != 0
 }
 
+// IsMount reports whether m describes a mount point.
+func (m VirtualFileMode) IsMount() bool {
+	return m&ModeMount != 0
+}
+
 // IsRegular reports whether m describes a regular file.
 // A regular file has no type bits set (not directory, symlink, device, etc.).
 func (m VirtualFileMode) IsRegular() bool {
-	return m&(ModeDir|ModeSymlink|ModeNamedPipe|ModeSocket|ModeDevice|ModeCharDevice|ModeIrregular) == 0
+	return m&(ModeDir|ModeSymlink|ModeNamedPipe|ModeSocket|ModeDevice|ModeCharDevice|ModeIrregular|ModeMount) == 0
 }
 
 // Perm returns the Unix permission bits in m (the lower 9 bits).
@@ -59,7 +65,7 @@ func (m VirtualFileMode) Perm() VirtualFileMode {
 // String returns a textual representation of the mode in Unix ls -l format.
 // Example: "drwxr-xr-x" for a directory with 755 permissions.
 func (m VirtualFileMode) String() string {
-	const str = "dalTLDpSugct?"
+	const str = "dLpSDc?M" // bits 31-24: Dir, Symlink, NamedPipe, Socket, Device, CharDevice, Irregular, Mount
 	var buf [32]byte
 	w := 0
 

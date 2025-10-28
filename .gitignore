@@ -37,3 +37,6 @@ go.work.sum
 # CLAUDE specific files and proposals/docs
 CLAUDE.md
 .claude/
+
+# Custom test/debug files or logs
+*.log

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mwantia/vfs/backend"
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/data/errors"
 	"github.com/mwantia/vfs/extension/acl"
 	"github.com/mwantia/vfs/extension/cache"
 	"github.com/mwantia/vfs/extension/encrypt"
@@ -15,11 +16,13 @@ import (
 	"github.com/mwantia/vfs/extension/rubbish"
 	"github.com/mwantia/vfs/extension/snapshot"
 	"github.com/mwantia/vfs/extension/versioning"
+	"github.com/mwantia/vfs/log"
 )
 
 // MountInfo holds configuration and metadata towards the specified mount
 type Mount struct {
 	mu        sync.RWMutex
+	log       *log.Logger
 	streamers map[string]*MountStreamer
 
 	Path      string
@@ -39,7 +42,7 @@ type Mount struct {
 	Versioning versioning.VirtualVersioningBackend
 }
 
-func NewMountInfo(path string, primary backend.VirtualObjectStorageBackend, opts ...MountOption) (*Mount, error) {
+func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectStorageBackend, opts ...MountOption) (*Mount, error) {
 	options := newDefaultMountOptions()
 	for _, opt := range opts {
 		if err := opt(options); err != nil {
@@ -48,6 +51,7 @@ func NewMountInfo(path string, primary backend.VirtualObjectStorageBackend, opts
 	}
 
 	mnt := &Mount{
+		log:       log,
 		streamers: make(map[string]*MountStreamer),
 
 		Path:          path,
@@ -197,51 +201,88 @@ func (m *Mount) Mount(ctx context.Context) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	errs := data.Errors{}
+	m.log.Info("Mount: initializing mount")
+	m.log.Debug("Mount: opening %d unique backend(s)", len(m.getUniqueBackends()))
+
+	errs := errors.Errors{}
 	// Open all backends/extensions set to this mount
 	for _, vb := range m.getUniqueBackends() {
+		m.log.Debug("Mount: opening backend %s", vb.Name())
 		if err := vb.Open(ctx); err != nil {
+			m.log.Error("Mount: failed to open backend %s - %v", vb.Name(), err)
 			errs.Add(err)
+		} else {
+			m.log.Debug("Mount: successfully opened backend %s", vb.Name())
 		}
 	}
 
-	return errs.Errors()
+	if errs.Errors() != nil {
+		m.log.Error("Mount: mount initialization failed with errors")
+		return errs.Errors()
+	}
+
+	m.log.Info("Mount: mount initialized successfully")
+	return nil
 }
 
 func (m *Mount) Unmount(ctx context.Context, force bool) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	m.log.Info("Unmount: unmounting (force=%v)", force)
+	m.log.Debug("Unmount: checking %d active streamer(s)", len(m.streamers))
+
 	if !force {
 		// Initial check, to see if we have any busy streamers
-		for _, streamer := range m.streamers {
+		for path, streamer := range m.streamers {
 			if streamer.IsBusy() {
+				m.log.Error("Unmount: streamer for %s is busy, cannot unmount", path)
 				// Fail, since we shouldn't unmount busy backends
 				return data.ErrBusy
 			}
 		}
 	}
 
-	for _, streamer := range m.streamers {
+	closedStreamers := 0
+	for path, streamer := range m.streamers {
 		if streamer.IsBusy() && !force {
+			m.log.Error("Unmount: streamer for %s is busy, cannot unmount", path)
 			return data.ErrBusy
 		} else {
+			m.log.Debug("Unmount: closing streamer for %s", path)
 			// Close the streamer
 			if err := streamer.Close(); err != nil {
+				m.log.Error("Unmount: failed to close streamer for %s - %v", path, err)
 				return err
 			}
+			closedStreamers++
 		}
 	}
 
-	errs := data.Errors{}
+	if closedStreamers > 0 {
+		m.log.Debug("Unmount: closed %d streamer(s)", closedStreamers)
+	}
+
+	m.log.Debug("Unmount: closing %d unique backend(s)", len(m.getUniqueBackends()))
+	errs := errors.Errors{}
 	// Open all backends/extensions set to this mount
 	for _, vb := range m.getUniqueBackends() {
+		m.log.Debug("Unmount: closing backend %s", vb.Name())
 		if err := vb.Close(ctx); err != nil {
+			m.log.Error("Unmount: failed to close backend %s - %v", vb.Name(), err)
 			errs.Add(err)
+		} else {
+			m.log.Debug("Unmount: successfully closed backend %s", vb.Name())
 		}
 	}
 
-	return errs.Errors()
+	if errs.Errors() != nil {
+		m.log.Error("Unmount: unmount failed with errors")
+		return errs.Errors()
+	}
+
+	m.log.Info("Unmount: unmount completed successfully")
+	return nil
 }
 
 func (m *Mount) GetStreamer(path string) (Streamer, bool) {
@@ -250,9 +291,11 @@ func (m *Mount) GetStreamer(path string) (Streamer, bool) {
 
 	streamer, exists := m.streamers[path]
 	if !exists {
+		m.log.Debug("GetStreamer: no existing streamer for %s", path)
 		return nil, false
 	}
 
+	m.log.Debug("GetStreamer: found existing streamer for %s", path)
 	return streamer, true
 }
 
@@ -260,8 +303,13 @@ func (m *Mount) OpenStreamer(ctx context.Context, path string, offset int64, fla
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	streamer := newMountStreamer(ctx, m, path, offset, flags)
+	m.log.Debug("OpenStreamer: creating new streamer for %s (offset=%d flags=%v)", path, offset, flags)
+
+	log := m.log.Named("streamer")
+	streamer := newMountStreamer(ctx, log, m, path, offset, flags)
+
 	m.streamers[path] = streamer
+	m.log.Debug("OpenStreamer: streamer created (total active=%d)", len(m.streamers))
 
 	return streamer
 }
@@ -270,16 +318,26 @@ func (m *Mount) CloseStreamer(ctx context.Context, path string, force bool) erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.log.Debug("CloseStreamer: closing streamer for %s (force=%v)", path, force)
+
 	streamer, exists := m.streamers[path]
 	if !exists {
+		m.log.Error("CloseStreamer: no streamer found for %s", path)
 		return data.ErrNotExist
 	}
 
 	if streamer.IsBusy() && !force {
+		m.log.Error("CloseStreamer: streamer for %s is busy", path)
 		return data.ErrBusy
 	}
 
-	return streamer.Close()
+	if err := streamer.Close(); err != nil {
+		m.log.Error("CloseStreamer: failed to close streamer for %s - %v", path, err)
+		return err
+	}
+
+	m.log.Debug("CloseStreamer: streamer closed successfully (remaining active=%d)", len(m.streamers)-1)
+	return nil
 }
 
 // getUniqueBackends returns a list of unique backends without duplicates
