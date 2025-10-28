@@ -6,17 +6,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mwantia/vfs/backend"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/data/errors"
-	"github.com/mwantia/vfs/extension/acl"
-	"github.com/mwantia/vfs/extension/cache"
-	"github.com/mwantia/vfs/extension/encrypt"
-	"github.com/mwantia/vfs/extension/multipart"
-	"github.com/mwantia/vfs/extension/rubbish"
-	"github.com/mwantia/vfs/extension/snapshot"
-	"github.com/mwantia/vfs/extension/versioning"
 	"github.com/mwantia/vfs/log"
+	"github.com/mwantia/vfs/mount/backend"
+	"github.com/mwantia/vfs/mount/extension/acl"
+	"github.com/mwantia/vfs/mount/extension/cache"
+	"github.com/mwantia/vfs/mount/extension/encrypt"
+	"github.com/mwantia/vfs/mount/extension/multipart"
+	"github.com/mwantia/vfs/mount/extension/rubbish"
+	"github.com/mwantia/vfs/mount/extension/snapshot"
+	"github.com/mwantia/vfs/mount/extension/versioning"
 )
 
 // MountInfo holds configuration and metadata towards the specified mount

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mwantia/vfs/backend"
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/backend"
 )
 
 func (mb *MemoryBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileMetadata) error {

@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	"github.com/mwantia/vfs"
-	"github.com/mwantia/vfs/backend"
-	"github.com/mwantia/vfs/backend/local"
-	"github.com/mwantia/vfs/backend/memory"
-	"github.com/mwantia/vfs/backend/sqlite"
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/backend"
+	"github.com/mwantia/vfs/mount/backend/local"
+	"github.com/mwantia/vfs/mount/backend/memory"
+	"github.com/mwantia/vfs/mount/backend/sqlite"
 )
 
 // TestBackendFactory creates a new backend instance for testing.

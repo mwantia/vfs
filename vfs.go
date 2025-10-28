@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mwantia/vfs/backend"
-	"github.com/mwantia/vfs/backend/memory"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/data/errors"
 	"github.com/mwantia/vfs/log"
 	"github.com/mwantia/vfs/mount"
+	"github.com/mwantia/vfs/mount/backend"
+	"github.com/mwantia/vfs/mount/backend/memory"
 )
 
 // VirtualFileSystem is the main VFS manager that handles mount points and delegates

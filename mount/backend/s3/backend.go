@@ -6,8 +6,8 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/mwantia/vfs/backend"
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/backend"
 )
 
 type S3Backend struct {

@@ -3,7 +3,7 @@ package acl
 import (
 	"context"
 
-	"github.com/mwantia/vfs/backend"
+	"github.com/mwantia/vfs/mount/backend"
 )
 
 type VirtualAclBackend interface {

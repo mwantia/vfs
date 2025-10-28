@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mwantia/vfs/backend"
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/backend"
 )
 
 func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileMetadata) error {

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"sync"
 
-	"github.com/mwantia/vfs/backend"
+	"github.com/mwantia/vfs/mount/backend"
 	"github.com/tidwall/btree"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )

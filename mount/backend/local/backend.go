@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/mwantia/vfs/backend"
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/backend"
 )
 
 type LocalBackend struct {
