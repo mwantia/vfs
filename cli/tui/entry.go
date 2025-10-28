@@ -28,6 +28,11 @@ func (e *Entry) DisplayName() string {
 
 // DisplaySize returns human-readable size
 func (e *Entry) DisplaySize() string {
+	// Check if it's a mount point first
+	if e.Mode.IsMount() {
+		return "<MNT>"
+	}
+
 	if e.IsDir {
 		return "<DIR>"
 	}
@@ -58,6 +63,11 @@ func (e *Entry) DisplayModTime() string {
 
 // Icon returns an icon character based on file type (simple version)
 func (e *Entry) Icon() string {
+	// Check if it's a mount point first
+	if e.Mode.IsMount() {
+		return "💾"
+	}
+
 	if e.IsDir {
 		return "📁"
 	}

@@ -44,6 +44,7 @@ type Model struct {
 
 	// Navigation state
 	currentPath string
+	previousDir string // Name of directory we came from (for breadcrumb navigation)
 	entries     []*Entry
 	cursor      int
 	offset      int
@@ -54,6 +55,7 @@ type Model struct {
 	showPreview    bool
 	previewContent string
 	previewError   error
+	previewGen     int // Generation counter to prevent race conditions
 
 	// Mode state
 	mode      Mode
@@ -61,9 +63,9 @@ type Model struct {
 	textInput textinput.Model
 
 	// Status
-	statusMsg   string
-	errorMsg    string
-	commandOut  string
+	statusMsg  string
+	errorMsg   string
+	commandOut string
 
 	// Clipboard
 	clipboard string
@@ -111,17 +113,44 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case directoryLoadedMsg:
 		m.entries = msg.entries
 		m.errorMsg = ""
-		if len(m.entries) > 0 && m.cursor >= len(m.entries) {
-			m.cursor = len(m.entries) - 1
-		}
-		if m.cursor < 0 {
-			m.cursor = 0
+
+		// Position cursor on previous directory if we just navigated back
+		if m.previousDir != "" {
+			DebugLog("Positioning cursor on previous directory: '%s'", m.previousDir)
+			for i, entry := range m.entries {
+				if entry.Name == m.previousDir {
+					m.cursor = i
+					// Adjust offset to keep cursor visible
+					visibleLines := m.getVisibleLines()
+					if m.cursor >= m.offset+visibleLines {
+						m.offset = m.cursor - visibleLines + 1
+					} else if m.cursor < m.offset {
+						m.offset = m.cursor
+					}
+					DebugLog("  Found at index %d, offset=%d", i, m.offset)
+					break
+				}
+			}
+			m.previousDir = "" // Clear after using
+		} else {
+			// Normal navigation - position at top
+			if len(m.entries) > 0 && m.cursor >= len(m.entries) {
+				m.cursor = len(m.entries) - 1
+			}
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
 		}
 		return m, m.updatePreview()
 
 	case previewLoadedMsg:
-		m.previewContent = msg.content
-		m.previewError = msg.err
+		// Only update if this preview is for the current generation
+		if msg.generation == m.previewGen {
+			m.previewContent = msg.content
+			m.previewError = msg.err
+		} else {
+			DebugLog("Ignoring stale preview (gen %d, current %d)", msg.generation, m.previewGen)
+		}
 		return m, nil
 
 	case commandExecutedMsg:
@@ -377,8 +406,9 @@ type directoryLoadedMsg struct {
 }
 
 type previewLoadedMsg struct {
-	content string
-	err     error
+	content    string
+	err        error
+	generation int // Which preview request this is for
 }
 
 type commandExecutedMsg struct {
@@ -405,30 +435,59 @@ func (m *Model) updatePreview() tea.Cmd {
 	}
 
 	entry := m.currentEntry()
+
+	// Increment generation counter for new preview
+	m.previewGen++
+	currentGen := m.previewGen
+
 	if entry == nil || entry.IsDir {
 		return func() tea.Msg {
-			return previewLoadedMsg{content: "", err: nil}
+			return previewLoadedMsg{content: "", err: nil, generation: currentGen}
 		}
 	}
 
+	// Capture entry path to prevent race
+	entryPath := entry.Path
+	entryName := entry.Name
+
 	return func() tea.Msg {
-		content, err := m.adapter.ReadFileContent(entry.Path, 10240) // 10KB preview
-		return previewLoadedMsg{content: content, err: err}
+		DebugLog("Loading preview gen=%d for: %s", currentGen, entryName)
+
+		// Calculate available space for preview
+		previewWidth := m.width / 2
+		previewHeight := m.height - 10
+
+		// Use new preview system that handles different file types
+		content, err := m.adapter.GeneratePreview(entryPath, previewWidth, previewHeight)
+
+		if err != nil {
+			DebugLog("Preview gen=%d failed for %s: %v", currentGen, entryName, err)
+		} else {
+			DebugLog("Preview gen=%d loaded for %s (%d bytes)", currentGen, entryName, len(content))
+		}
+
+		return previewLoadedMsg{content: content, err: err, generation: currentGen}
 	}
 }
 
 func (m *Model) enterDirectory() tea.Cmd {
 	entry := m.currentEntry()
 	if entry == nil {
+		DebugLog("enterDirectory: No entry selected")
 		return nil
 	}
+
+	DebugLog("enterDirectory: Selected '%s' (IsDir=%v, Mode=%s)", entry.Name, entry.IsDir, entry.Mode.String())
 
 	if !entry.IsDir {
 		m.statusMsg = fmt.Sprintf("Cannot open file: %s", entry.Name)
+		DebugLog("  Not a directory, cannot enter")
 		return nil
 	}
 
+	DebugLog("  Navigating to: %s", entry.Path)
 	m.currentPath = entry.Path
+	m.previousDir = "" // Clear previous directory when entering new one
 	m.cursor = 0
 	m.offset = 0
 	return m.loadDirectory()
@@ -438,6 +497,10 @@ func (m *Model) goBack() tea.Cmd {
 	if m.currentPath == "/" {
 		return nil
 	}
+
+	// Remember which directory we're leaving so we can position cursor on it
+	m.previousDir = filepath.Base(m.currentPath)
+	DebugLog("goBack: Leaving '%s', will position cursor on it", m.previousDir)
 
 	m.currentPath = filepath.Dir(m.currentPath)
 	m.cursor = 0

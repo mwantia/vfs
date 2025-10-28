@@ -26,74 +26,47 @@ func NewVFSAdapter(ctx context.Context, fs *vfs.VirtualFileSystem) *VFSAdapter {
 
 // ListDirectory returns entries in the specified directory
 func (a *VFSAdapter) ListDirectory(path string) ([]*Entry, error) {
+	DebugLog("ListDirectory called: path='%s'", path)
+
 	metas, err := a.vfs.ReadDirectory(a.ctx, path)
 	if err != nil {
+		DebugLog("  ReadDirectory error: %v", err)
 		// Special case: if root directory read fails, it might not exist as an entry
 		// Try to infer children by attempting to stat known common directories
-		if path == "/" && err == data.ErrNotExist {
-			return a.inferRootChildren()
-		}
 		return nil, err
 	}
 
-	// Normalize path for comparison - backend keys are relative to mount point
-	// So /etc/config.conf is stored as "etc/config.conf" in the backend
-	normalizedPath := strings.TrimPrefix(path, "/")
-	if normalizedPath != "" && !strings.HasSuffix(normalizedPath, "/") {
-		normalizedPath = normalizedPath + "/"
-	}
+	DebugLog("  ReadDirectory returned %d metadata entries", len(metas))
 
-	// Track seen entries to avoid duplicates
-	seen := make(map[string]bool)
+	// VFS already returns only entries for this directory
+	// Just convert them to Entry structs
 	entries := make([]*Entry, 0, len(metas))
 
-	for _, meta := range metas {
-		// Keys in metadata are relative to mount point (without leading /)
-		// For path "/etc", normalizedPath is "etc/"
-		// meta.Key might be "etc/config.conf"
+	for i, meta := range metas {
+		DebugLog("  Processing meta[%d]: Key='%s', Mode=%s", i, meta.Key, meta.Mode.String())
 
-		// Strip the directory prefix from the key
-		relativeKey := meta.Key
-		if normalizedPath != "" {
-			if !strings.HasPrefix(meta.Key, normalizedPath) {
-				// This entry is not in the current directory
-				continue
-			}
-			relativeKey = strings.TrimPrefix(meta.Key, normalizedPath)
-		}
-
-		// Skip if empty (current directory itself)
-		if relativeKey == "" {
-			continue
-		}
-
-		// Extract only the direct child name (first path component after current dir)
-		parts := strings.Split(relativeKey, "/")
-		directChild := parts[0]
-
-		// Skip if we've already seen this entry
-		if seen[directChild] {
-			continue
-		}
-		seen[directChild] = true
-
-		// Determine if this is a directory by checking if there are more parts
-		// or if the mode indicates it's a directory
-		isDir := len(parts) > 1 || meta.Mode.IsDir()
+		// The key is the entry name relative to the current directory
+		name := meta.Key
 
 		// Build the full absolute path for VFS operations
-		fullPath := filepath.Join(path, directChild)
+		fullPath := filepath.Join(path, name)
 
 		entry := &Entry{
-			Name:     directChild,
+			Name:     name,
 			Path:     fullPath,
 			Size:     meta.Size,
 			Mode:     meta.Mode,
 			ModTime:  meta.ModifyTime,
-			IsDir:    isDir,
+			IsDir:    meta.Mode.IsDir(),
 			MimeType: meta.ContentType,
 		}
 		entries = append(entries, entry)
+		DebugLog("    ADD: Name='%s', Path='%s', IsDir=%v", name, fullPath, entry.IsDir)
+	}
+
+	DebugLog("  Returning %d entries for path '%s'", len(entries), path)
+	for i, entry := range entries {
+		DebugLog("    [%d] Name='%s', Path='%s', IsDir=%v", i, entry.Name, entry.Path, entry.IsDir)
 	}
 
 	return entries, nil
@@ -245,35 +218,4 @@ func (a *VFSAdapter) StreamFile(path string) (io.ReadCloser, error) {
 		return nil, err
 	}
 	return file, nil
-}
-
-// inferRootChildren attempts to discover root-level directories
-// This is a workaround for when the root directory entry doesn't exist
-func (a *VFSAdapter) inferRootChildren() ([]*Entry, error) {
-	// Try common directory names
-	commonDirs := []string{"home", "etc", "var", "tmp", "usr", "opt", "data"}
-
-	entries := make([]*Entry, 0)
-
-	for _, name := range commonDirs {
-		path := "/" + name
-		meta, err := a.vfs.StatMetadata(a.ctx, path)
-		if err != nil {
-			// Skip if doesn't exist
-			continue
-		}
-
-		entry := &Entry{
-			Name:     name,
-			Path:     path,
-			Size:     meta.Size,
-			Mode:     meta.Mode,
-			ModTime:  meta.ModifyTime,
-			IsDir:    meta.Mode.IsDir(),
-			MimeType: meta.ContentType,
-		}
-		entries = append(entries, entry)
-	}
-
-	return entries, nil
 }
