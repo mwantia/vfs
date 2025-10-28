@@ -4,6 +4,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const (
+	TextFile    string = "📑"
+	ImageFile   string = "🖼️"
+	VideoFile   string = "🎞️"
+	ArchiveFile string = "📦"
+	CodeFile    string = "📇"
+	MountFile   string = "🗃️"
+	FolderFile  string = "📂"
+	DefaultFile string = "📄"
+)
+
 // Theme defines the color scheme and styles for the TUI
 type Theme struct {
 	// Base colors

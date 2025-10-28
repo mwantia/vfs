@@ -65,25 +65,27 @@ func (e *Entry) DisplayModTime() string {
 func (e *Entry) Icon() string {
 	// Check if it's a mount point first
 	if e.Mode.IsMount() {
-		return "💾"
+		return MountFile
 	}
 
 	if e.IsDir {
-		return "📁"
+		return FolderFile
 	}
 
 	// Simple icon mapping based on file extension
 	switch {
 	case isTextFile(e.Name):
-		return "📄"
+		return TextFile
 	case isImageFile(e.Name):
-		return "🖼️"
+		return ImageFile
+	case isVideoFile(e.Name):
+		return VideoFile
 	case isArchiveFile(e.Name):
-		return "📦"
+		return ArchiveFile
 	case isCodeFile(e.Name):
-		return "💻"
+		return CodeFile
 	default:
-		return "📄"
+		return DefaultFile
 	}
 }
 
@@ -100,6 +102,16 @@ func isTextFile(name string) bool {
 
 func isImageFile(name string) bool {
 	exts := []string{".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp"}
+	for _, ext := range exts {
+		if len(name) > len(ext) && name[len(name)-len(ext):] == ext {
+			return true
+		}
+	}
+	return false
+}
+
+func isVideoFile(name string) bool {
+	exts := []string{".mp4"}
 	for _, ext := range exts {
 		if len(name) > len(ext) && name[len(name)-len(ext):] == ext {
 			return true

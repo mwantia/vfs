@@ -71,6 +71,8 @@ func setupDemoVFS(ctx context.Context) (*vfs.VirtualFileSystem, error) {
 		"/demo/downloads",
 		"/demo/logs",
 		"/demo/config",
+		"/sys",
+		"/sys/logs",
 	}
 
 	for _, dir := range demoDirectories {
@@ -86,6 +88,7 @@ func setupDemoVFS(ctx context.Context) (*vfs.VirtualFileSystem, error) {
 		"/demo/downloads/file2.dat": "Download Two",
 		"/demo/config/config.conf":  "# Configuration file\nenabled = true",
 		"/demo/logs/system.log":     "System log entry 1\nSystem log entry 2\nSystem log entry 3",
+		"/sys/logs/vfs.log":         "",
 	}
 
 	for path, content := range demoFiles {
@@ -109,52 +112,33 @@ func setupDemoVFS(ctx context.Context) (*vfs.VirtualFileSystem, error) {
 func main() {
 	ctx := context.Background()
 
-	// Initialize debug logging
-	if err := tui.InitDebugLog(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize debug log: %v\n", err)
-		os.Exit(1)
-	}
-	defer tui.CloseDebugLog()
-
-	tui.DebugLog("Starting VFS CLI")
-
 	// Set up demo VFS
 	fs, err := setupDemoVFS(ctx)
 	if err != nil {
-		tui.DebugLog("Failed to setup VFS: %v", err)
 		fmt.Fprintf(os.Stderr, "Failed to setup VFS: %v\n", err)
 		os.Exit(1)
 	}
-	tui.DebugLog("VFS initialized successfully")
 
 	// Set up command center
 	cmd := command.NewCommandCenter()
 	if err := builtin.InitBuiltin(cmd); err != nil {
-		tui.DebugLog("Failed to setup Command Center: %v", err)
 		fmt.Fprintf(os.Stderr, "Failed to setup Command Center: %v\n", err)
 		os.Exit(1)
 	}
-	tui.DebugLog("Command center initialized")
 
 	// Create VFS adapter and TUI model
 	adapter := tui.NewVFSAdapter(ctx, fs)
 	model := tui.NewModel(adapter, cmd)
 
 	// Start TUI
-	tui.DebugLog("Starting TUI")
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
-		tui.DebugLog("TUI error: %v", err)
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		os.Exit(1)
 	}
-	tui.DebugLog("TUI ended normally")
 
 	// Clean up VFS mounts before exiting
-	tui.DebugLog("Cleaning up VFS mounts")
 	if err := fs.Close(ctx); err != nil {
-		tui.DebugLog("Error closing VFS: %v", err)
 		fmt.Fprintf(os.Stderr, "Warning: Failed to properly close VFS: %v\n", err)
 	}
-	tui.DebugLog("VFS cleanup complete")
 }

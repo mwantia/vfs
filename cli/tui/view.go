@@ -208,10 +208,7 @@ func (m *Model) renderStatus() string {
 	}
 
 	// Calculate spacing
-	spacing := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
-	if spacing < 0 {
-		spacing = 0
-	}
+	spacing := max(m.width-lipgloss.Width(left)-lipgloss.Width(right)-4, 0)
 
 	statusLine := left + strings.Repeat(" ", spacing) + right
 	return m.theme.StatusBarStyle.Width(m.width).Render(statusLine)

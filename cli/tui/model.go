@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -56,6 +57,11 @@ type Model struct {
 	previewContent string
 	previewError   error
 	previewGen     int // Generation counter to prevent race conditions
+
+	// Mouse state
+	lastClickTime int64  // Unix nano timestamp of last click
+	lastClickY    int    // Y position of last click
+	fileListTop   int    // Y position where file list starts (for click detection)
 
 	// Mode state
 	mode      Mode
@@ -116,7 +122,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Position cursor on previous directory if we just navigated back
 		if m.previousDir != "" {
-			DebugLog("Positioning cursor on previous directory: '%s'", m.previousDir)
 			for i, entry := range m.entries {
 				if entry.Name == m.previousDir {
 					m.cursor = i
@@ -127,7 +132,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else if m.cursor < m.offset {
 						m.offset = m.cursor
 					}
-					DebugLog("  Found at index %d, offset=%d", i, m.offset)
 					break
 				}
 			}
@@ -148,9 +152,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation == m.previewGen {
 			m.previewContent = msg.content
 			m.previewError = msg.err
-		} else {
-			DebugLog("Ignoring stale preview (gen %d, current %d)", msg.generation, m.previewGen)
 		}
+
 		return m, nil
 
 	case commandExecutedMsg:
@@ -165,6 +168,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouseEvent(msg)
 	}
 
 	// Handle text input updates when in input mode
@@ -302,6 +308,72 @@ func (m *Model) handleHelpMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeNormal
 		return m, nil
 	}
+	return m, nil
+}
+
+// handleMouseEvent processes mouse input
+func (m *Model) handleMouseEvent(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Only handle mouse in normal mode
+	if m.mode != ModeNormal {
+		return m, nil
+	}
+
+	// Handle scroll wheel
+	if msg.Action == tea.MouseActionPress {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			// Scroll up (move cursor up)
+			m.moveCursor(-1)
+			return m, m.updatePreview()
+
+		case tea.MouseButtonWheelDown:
+			// Scroll down (move cursor down)
+			m.moveCursor(1)
+			return m, m.updatePreview()
+
+		case tea.MouseButtonLeft:
+			// Calculate which file entry was clicked
+			// Title bar (1 line) + border top (1 line) = 2 lines before first entry
+			m.fileListTop = 2
+
+			if msg.Y < m.fileListTop {
+				// Click was in title area, ignore
+				return m, nil
+			}
+
+			// Calculate which entry was clicked
+			clickedLine := msg.Y - m.fileListTop
+			clickedIndex := m.offset + clickedLine
+
+			if clickedIndex >= 0 && clickedIndex < len(m.entries) {
+				// Check for double-click (within 500ms and same position)
+				now := time.Now().UnixNano()
+				doubleClickThreshold := int64(500 * time.Millisecond)
+
+				isDoubleClick := (now-m.lastClickTime) < doubleClickThreshold &&
+					msg.Y == m.lastClickY &&
+					clickedIndex == m.cursor
+
+				m.lastClickTime = now
+				m.lastClickY = msg.Y
+
+				if isDoubleClick {
+					// Double-click: enter directory
+					m.cursor = clickedIndex
+					return m, m.enterDirectory()
+				} else {
+					// Single click: select item
+					m.cursor = clickedIndex
+					return m, m.updatePreview()
+				}
+			}
+
+		case tea.MouseButtonRight:
+			// Right-click: navigate back to parent directory
+			return m, m.goBack()
+		}
+	}
+
 	return m, nil
 }
 
@@ -448,23 +520,14 @@ func (m *Model) updatePreview() tea.Cmd {
 
 	// Capture entry path to prevent race
 	entryPath := entry.Path
-	entryName := entry.Name
 
 	return func() tea.Msg {
-		DebugLog("Loading preview gen=%d for: %s", currentGen, entryName)
-
 		// Calculate available space for preview
 		previewWidth := m.width / 2
 		previewHeight := m.height - 10
 
 		// Use new preview system that handles different file types
 		content, err := m.adapter.GeneratePreview(entryPath, previewWidth, previewHeight)
-
-		if err != nil {
-			DebugLog("Preview gen=%d failed for %s: %v", currentGen, entryName, err)
-		} else {
-			DebugLog("Preview gen=%d loaded for %s (%d bytes)", currentGen, entryName, len(content))
-		}
 
 		return previewLoadedMsg{content: content, err: err, generation: currentGen}
 	}
@@ -473,23 +536,19 @@ func (m *Model) updatePreview() tea.Cmd {
 func (m *Model) enterDirectory() tea.Cmd {
 	entry := m.currentEntry()
 	if entry == nil {
-		DebugLog("enterDirectory: No entry selected")
 		return nil
 	}
-
-	DebugLog("enterDirectory: Selected '%s' (IsDir=%v, Mode=%s)", entry.Name, entry.IsDir, entry.Mode.String())
 
 	if !entry.IsDir {
 		m.statusMsg = fmt.Sprintf("Cannot open file: %s", entry.Name)
-		DebugLog("  Not a directory, cannot enter")
 		return nil
 	}
 
-	DebugLog("  Navigating to: %s", entry.Path)
 	m.currentPath = entry.Path
 	m.previousDir = "" // Clear previous directory when entering new one
 	m.cursor = 0
 	m.offset = 0
+
 	return m.loadDirectory()
 }
 
@@ -500,7 +559,6 @@ func (m *Model) goBack() tea.Cmd {
 
 	// Remember which directory we're leaving so we can position cursor on it
 	m.previousDir = filepath.Base(m.currentPath)
-	DebugLog("goBack: Leaving '%s', will position cursor on it", m.previousDir)
 
 	m.currentPath = filepath.Dir(m.currentPath)
 	m.cursor = 0

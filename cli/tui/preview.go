@@ -149,8 +149,6 @@ func (a *VFSAdapter) GenerateTextPreview(path string, maxBytes int) (string, err
 
 // GenerateImagePreview creates an ANSI art preview of an image
 func (a *VFSAdapter) GenerateImagePreview(path string, previewWidth, previewHeight int) (string, error) {
-	DebugLog("Opening image file: %s", filepath.Base(path))
-
 	// First check file size to prevent loading huge images
 	stat, err := a.vfs.StatMetadata(a.ctx, path)
 	if err != nil {
@@ -171,7 +169,6 @@ func (a *VFSAdapter) GenerateImagePreview(path string, previewWidth, previewHeig
 	defer file.Close()
 
 	// Decode image
-	DebugLog("Decoding image: %s", filepath.Base(path))
 	img, format, err := image.Decode(file)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode image: %w", err)
@@ -191,12 +188,8 @@ func (a *VFSAdapter) GenerateImagePreview(path string, previewWidth, previewHeig
 	newW := int(float64(imgWidth) * float64(scale))
 	newH := int(float64(imgHeight) * float64(scale))
 
-	DebugLog("Image decoded: %s format, %dx%d pixels", format, imgWidth, imgHeight)
-
 	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
 	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
-
-	DebugLog("Rendering image: original=%dx%d, terminal=%dx%d (scale=%.2f)", imgWidth, imgHeight, newW, newH, scale)
 
 	// Create ANSI image with calculated dimensions
 	ansImg, err := ansimage.NewFromImage(dst, color.Transparent, ansimage.NoDithering)
@@ -204,11 +197,8 @@ func (a *VFSAdapter) GenerateImagePreview(path string, previewWidth, previewHeig
 		return "", fmt.Errorf("failed to create ANSI image: %w", err)
 	}
 
-	DebugLog("Rendering ANSI art for: %s", filepath.Base(path))
 	rendered := ansImg.Render()
-
 	header := fmt.Sprintf("Image: %s format, %dx%d pixels\n\n", format, imgWidth, imgHeight)
-	DebugLog("Image preview complete for %s (output: %dx%d chars)", filepath.Base(path), newW, newH)
 
 	return header + rendered, nil
 }
@@ -258,31 +248,25 @@ func (a *VFSAdapter) GenerateBinaryPreview(path string, maxBytes int) (string, e
 // GeneratePreview generates an appropriate preview for any file
 func (a *VFSAdapter) GeneratePreview(path string, previewWidth, previewHeight int) (string, error) {
 	fileInfo := DetectFileType(path)
-	DebugLog("Preview type for %s: %v (%s)", filepath.Base(path), fileInfo.Type, fileInfo.Description)
 
 	switch fileInfo.Type {
 	case PreviewText:
 		content, err := a.GenerateTextPreview(path, 10240) // 10KB
 		if err != nil {
-			DebugLog("Text preview error for %s: %v", filepath.Base(path), err)
 			return "", err
 		}
 		return content, nil
 
 	case PreviewImage:
 		// Reserve space for header and borders
-		DebugLog("Attempting image preview for %s", filepath.Base(path))
 		content, err := a.GenerateImagePreview(path, previewWidth, previewHeight)
 		if err != nil {
 			// If image rendering fails, fall back to binary preview
-			DebugLog("Image preview failed for %s: %v - falling back to binary", filepath.Base(path), err)
 			return a.GenerateBinaryPreview(path, 1024)
 		}
-		DebugLog("Image preview success for %s", filepath.Base(path))
 		return content, nil
 
 	case PreviewBinary:
-		DebugLog("Using binary preview for %s", filepath.Base(path))
 		return a.GenerateBinaryPreview(path, 1024) // 1KB hex dump
 
 	case PreviewUnsupported:

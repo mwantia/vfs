@@ -26,25 +26,18 @@ func NewVFSAdapter(ctx context.Context, fs *vfs.VirtualFileSystem) *VFSAdapter {
 
 // ListDirectory returns entries in the specified directory
 func (a *VFSAdapter) ListDirectory(path string) ([]*Entry, error) {
-	DebugLog("ListDirectory called: path='%s'", path)
-
 	metas, err := a.vfs.ReadDirectory(a.ctx, path)
 	if err != nil {
-		DebugLog("  ReadDirectory error: %v", err)
 		// Special case: if root directory read fails, it might not exist as an entry
 		// Try to infer children by attempting to stat known common directories
 		return nil, err
 	}
 
-	DebugLog("  ReadDirectory returned %d metadata entries", len(metas))
-
 	// VFS already returns only entries for this directory
 	// Just convert them to Entry structs
 	entries := make([]*Entry, 0, len(metas))
 
-	for i, meta := range metas {
-		DebugLog("  Processing meta[%d]: Key='%s', Mode=%s", i, meta.Key, meta.Mode.String())
-
+	for _, meta := range metas {
 		// The key is the entry name relative to the current directory
 		name := meta.Key
 
@@ -61,12 +54,6 @@ func (a *VFSAdapter) ListDirectory(path string) ([]*Entry, error) {
 			MimeType: meta.ContentType,
 		}
 		entries = append(entries, entry)
-		DebugLog("    ADD: Name='%s', Path='%s', IsDir=%v", name, fullPath, entry.IsDir)
-	}
-
-	DebugLog("  Returning %d entries for path '%s'", len(entries), path)
-	for i, entry := range entries {
-		DebugLog("    [%d] Name='%s', Path='%s', IsDir=%v", i, entry.Name, entry.Path, entry.IsDir)
 	}
 
 	return entries, nil
