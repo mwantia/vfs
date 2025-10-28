@@ -24,6 +24,8 @@ type VirtualFileSystem struct {
 	mu   sync.RWMutex
 	log  *log.Logger
 	mnts map[string]*mount.Mount
+
+	Commands *CommandManager
 }
 
 // NewVfs creates a new VirtualFileSystem instance with no initial mounts.
@@ -38,6 +40,9 @@ func NewVfs(opts ...VirtualFileSystemOption) (*VirtualFileSystem, error) {
 	vfs := &VirtualFileSystem{
 		log:  log.NewLogger("vfs", options.LogLevel, options.LogFile, options.NoTerminalLog),
 		mnts: make(map[string]*mount.Mount),
+		Commands: &CommandManager{
+			cmds: make(map[string]Command),
+		},
 	}
 
 	vfs.log.Info("VFS initialized with log level: %s", options.LogLevel)
@@ -423,6 +428,369 @@ func (vfs *VirtualFileSystem) WriteFile(ctx context.Context, path string, offset
 	return n, err
 }
 
+// Stat returns file information for the given path.
+// Returns an error if the path doesn't exist.
+func (vfs *VirtualFileSystem) StatMetadata(ctx context.Context, path string) (*data.VirtualFileMetadata, error) {
+	// Always start with an absolute path
+	absolute, err := data.ToAbsolutePath(path)
+	if err != nil {
+		vfs.log.Error("StatMetadata: failed to convert path to absolute: %s - %v", path, err)
+		return nil, err
+	}
+
+	vfs.log.Debug("StatMetadata: path=%s", absolute)
+
+	// Check if this path is itself a mount point
+	vfs.mu.RLock()
+	_, isMountPoint := vfs.mnts[absolute]
+	vfs.mu.RUnlock()
+
+	if isMountPoint {
+		vfs.log.Debug("StatMetadata: path %s is a mount point, returning virtual metadata", absolute)
+		// Return virtual metadata for the mount point itself
+		now := time.Now()
+		// Extract the mount point name (last component of the path)
+		mountName := absolute
+		if lastSlash := strings.LastIndex(absolute, "/"); lastSlash >= 0 && lastSlash < len(absolute)-1 {
+			mountName = absolute[lastSlash+1:]
+		} else if absolute == "/" {
+			mountName = ""
+		}
+
+		return &data.VirtualFileMetadata{
+			ID:          absolute,
+			Key:         mountName,
+			Mode:        data.ModeMount | data.ModeDir | 0755,
+			Size:        0,
+			AccessTime:  now,
+			ModifyTime:  now,
+			CreateTime:  now,
+			ContentType: "inode/directory",
+		}, nil
+	}
+
+	mnt, err := vfs.getMountFromPath(absolute)
+	if err != nil {
+		vfs.log.Error("StatMetadata: no mount found for path: %s - %v", absolute, err)
+		return nil, err
+	}
+
+	relative := data.ToRelativePath(absolute, mnt.Path)
+	// We need to determine if the file exists
+	if mnt.Metadata != nil {
+		vfs.log.Debug("StatMetadata: querying metadata backend for %s", absolute)
+		// Try to read info from metadata
+		meta, err := mnt.Metadata.ReadMeta(ctx, relative)
+		if err != nil {
+			// Fail if any error except NotExists
+			if err != data.ErrNotExist {
+				vfs.log.Error("StatMetadata: metadata read failed for %s - %v", absolute, err)
+				return nil, err
+			}
+			vfs.log.Debug("StatMetadata: metadata not found for %s, falling back to object storage", absolute)
+		} else {
+			vfs.log.Debug("StatMetadata: found in metadata (size=%d mode=%s)", meta.Size, meta.Mode)
+			return meta, nil
+		}
+	} else {
+		vfs.log.Debug("StatMetadata: no metadata backend, using object storage for %s", absolute)
+	}
+	// Fallback to storage to read object stats
+	vfs.log.Debug("StatMetadata: querying object storage backend for %s", absolute)
+	stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
+	if err != nil {
+		vfs.log.Error("StatMetadata: object storage HeadObject failed for %s - %v", absolute, err)
+		return nil, err
+	}
+	vfs.log.Debug("StatMetadata: found in object storage (size=%d mode=%s)", stat.Size, stat.Mode)
+	// Convert object stats to metadata
+	meta := stat.ToMetadata()
+	if !mnt.IsDualMount && mnt.Metadata != nil {
+		vfs.log.Debug("StatMetadata: syncing object stat to metadata for %s", absolute)
+		// Write stat back into metadata
+		if err := mnt.Metadata.CreateMeta(ctx, meta); err != nil {
+			vfs.log.Warn("StatMetadata: failed to sync metadata for %s - %v", absolute, err)
+			return nil, err
+		}
+	}
+
+	return meta, nil
+}
+
+// Lookup checks if a file or directory exists at the given path.
+// Returns true if the path exists, false otherwise.
+func (vfs *VirtualFileSystem) LookupMetadata(ctx context.Context, path string) (bool, error) {
+	meta, err := vfs.StatMetadata(ctx, path)
+	if err != nil {
+		return false, nil
+	}
+
+	return (meta != nil), nil
+}
+
+// ReadDirectory returns a list of entries in the directory at path.
+// Returns an error if the path is not a directory or doesn't exist.
+func (vfs *VirtualFileSystem) ReadDirectory(ctx context.Context, path string) ([]*data.VirtualFileMetadata, error) {
+	// Always start with an absolute path
+	absolute, err := data.ToAbsolutePath(path)
+	if err != nil {
+		vfs.log.Error("ReadDirectory: failed to convert path to absolute: %s - %v", path, err)
+		return nil, err
+	}
+
+	vfs.log.Debug("ReadDirectory: path=%s", absolute)
+
+	mnt, err := vfs.getMountFromPath(absolute)
+	if err != nil {
+		vfs.log.Error("ReadDirectory: no mount found for path: %s - %v", absolute, err)
+		return nil, err
+	}
+
+	relative := data.ToRelativePath(absolute, mnt.Path)
+
+	// Use a map to track entries by key to avoid duplicates
+	metaMap := make(map[string]*data.VirtualFileMetadata)
+
+	// Try to get entries from metadata first if available
+	foundInMetadata := false
+	if mnt.Metadata != nil {
+		vfs.log.Debug("ReadDirectory: attempting to read from metadata backend for %s", absolute)
+		// Calculate the correct prefix for querying
+		prefix := relative
+		if prefix != "" {
+			prefix += "/"
+		}
+
+		query := &backend.MetadataQuery{
+			Prefix:    prefix,
+			Delimiter: "/", // Only return direct children, not entire tree
+			SortBy:    backend.SortByKey,
+			SortOrder: backend.SortAsc,
+		}
+
+		result, err := mnt.Metadata.QueryMeta(ctx, query)
+		if err != nil {
+			vfs.log.Error("ReadDirectory: metadata query failed for %s - %v", absolute, err)
+			return nil, err
+		}
+
+		if result != nil && result.TotalCount > 0 {
+			vfs.log.Debug("ReadDirectory: found %d entries in metadata for %s", result.TotalCount, absolute)
+			// Add all metadata entries to the map
+			// Strip the directory prefix from keys to make them relative
+			for _, meta := range result.Candidates {
+				// Clone metadata and adjust key to be relative to current directory
+				relativeMeta := meta.Clone()
+				if prefix != "" {
+					relativeMeta.Key = strings.TrimPrefix(meta.Key, prefix)
+				}
+				metaMap[relativeMeta.Key] = relativeMeta
+			}
+			foundInMetadata = true
+		} else {
+			vfs.log.Debug("ReadDirectory: no entries found in metadata for %s, will check object storage", absolute)
+		}
+	}
+
+	// If not found in metadata, or no metadata backend, fall back to storage
+	if !foundInMetadata {
+		vfs.log.Debug("ReadDirectory: reading from object storage backend for %s", absolute)
+		// Use storage backend to list objects
+		stats, err := mnt.ObjectStorage.ListObjects(ctx, relative)
+		if err != nil {
+			// If directory doesn't exist but we're at a mount point root, that's OK - just empty
+			if err == data.ErrNotExist && relative == "" {
+				vfs.log.Debug("ReadDirectory: empty mount root for %s, continuing with empty list", absolute)
+				// This is the root of a mount with no entries yet - continue with empty list
+			} else {
+				vfs.log.Error("ReadDirectory: object storage ListObjects failed for %s - %v", absolute, err)
+				return nil, err
+			}
+		} else {
+			vfs.log.Debug("ReadDirectory: found %d entries in object storage for %s", len(stats), absolute)
+			// Convert stats to metadata
+			// Calculate prefix for stripping (to make keys relative to current directory for display)
+			prefix := relative
+			if prefix != "" {
+				prefix += "/"
+			}
+
+			for _, stat := range stats {
+				meta := stat.ToMetadata()
+
+				// The stat.Key from storage is relative to the listed directory
+				// We need to prepend the directory path to get the full mount-relative key for metadata
+				fullKey := stat.Key
+				if relative != "" {
+					fullKey = relative + "/" + stat.Key
+				}
+
+				// Sync to metadata if available AND it's a separate backend instance
+				if mnt.Metadata != nil && !mnt.IsDualMount {
+					// Create a copy with the full mount-relative key for metadata storage
+					metaForSync := meta.Clone()
+					metaForSync.Key = fullKey
+					vfs.log.Debug("ReadDirectory: syncing entry %s to metadata", metaForSync.Key)
+					if err := mnt.Metadata.CreateMeta(ctx, metaForSync); err != nil {
+						vfs.log.Warn("ReadDirectory: failed to sync metadata for %s - %v (continuing)", metaForSync.Key, err)
+						continue // Ignore errors for existing metadata
+					}
+				}
+
+				// Use the relative key (just the name) for the directory listing result
+				relativeKey := stat.Key
+				relativeMeta := meta.Clone()
+				relativeMeta.Key = relativeKey
+				metaMap[relativeKey] = relativeMeta
+			}
+		}
+	}
+
+	// Inject virtual mount point entries
+	childMounts := vfs.getChildMounts(absolute)
+	if len(childMounts) > 0 {
+		vfs.log.Debug("ReadDirectory: injecting %d virtual mount points for %s", len(childMounts), absolute)
+	}
+	for _, mountPath := range childMounts {
+		// Extract the mount point name (last component of the path)
+		mountName := mountPath
+		if lastSlash := strings.LastIndex(mountPath, "/"); lastSlash >= 0 {
+			mountName = mountPath[lastSlash+1:]
+		}
+
+		// Calculate the relative key for this mount point
+		mountKey := relative
+		if mountKey != "" {
+			mountKey = mountKey + "/" + mountName
+		} else {
+			mountKey = mountName
+		}
+
+		// Only add if not already present (real directory takes precedence)
+		if _, exists := metaMap[mountKey]; !exists {
+			vfs.log.Debug("ReadDirectory: adding virtual mount point %s at %s", mountName, mountPath)
+			// Create virtual metadata for the mount point
+			now := time.Now()
+			metaMap[mountKey] = &data.VirtualFileMetadata{
+				ID:          mountPath, // Use mount path as ID
+				Key:         mountKey,
+				Mode:        data.ModeMount | data.ModeDir | 0755,
+				Size:        0,
+				AccessTime:  now,
+				ModifyTime:  now,
+				CreateTime:  now,
+				ContentType: "inode/directory",
+			}
+		} else {
+			vfs.log.Debug("ReadDirectory: mount point %s already exists as real directory", mountName)
+		}
+	}
+
+	// Convert map back to slice and sort by key
+	metas := make([]*data.VirtualFileMetadata, 0, len(metaMap))
+	for _, meta := range metaMap {
+		metas = append(metas, meta)
+	}
+
+	// Sort entries by key for consistent ordering
+	sort.Slice(metas, func(i, j int) bool {
+		return metas[i].Key < metas[j].Key
+	})
+
+	vfs.log.Info("ReadDirectory: successfully read %d entries from %s", len(metas), absolute)
+	return metas, nil
+}
+
+// Mount attaches a filesystem handler at the specified path.
+// Options can be used to configure the mount (e.g., read-only).
+func (vfs *VirtualFileSystem) Mount(ctx context.Context, path string, primary backend.VirtualObjectStorageBackend, opts ...mount.MountOption) error {
+	// Always start with an absolute path
+	absolute, err := data.ToAbsolutePath(path)
+	if err != nil {
+		vfs.log.Error("Mount: failed to convert path to absolute: %s - %v", path, err)
+		return err
+	}
+
+	vfs.log.Debug("Mount: mounting %s backend at %s", primary.Name(), absolute)
+
+	if len(absolute) == 0 {
+		vfs.log.Error("Mount: invalid empty path")
+		return errors.InvalidPath(nil, absolute)
+	}
+	// Check if parent mount denies nesting BEFORE acquiring write lock
+	if parent, err := vfs.getMountFromPath(absolute); err == nil {
+		if !parent.Options.Nesting {
+			vfs.log.Error("Mount: parent mount at %s denies nesting", parent.Path)
+			return errors.PathMountNestingDenied(nil, parent.Path)
+		}
+		vfs.log.Debug("Mount: parent mount at %s allows nesting", parent.Path)
+	}
+
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	name := fmt.Sprintf("mount/%s", primary.Name())
+	log := vfs.log.Named(name)
+
+	mnt, err := mount.NewMountInfo(path, log, primary, opts...)
+	if err != nil {
+		vfs.log.Error("Mount: failed to create mount info for %s - %v", absolute, err)
+		return err
+	}
+
+	if _, exists := vfs.mnts[absolute]; exists {
+		vfs.log.Error("Mount: path %s is already mounted", absolute)
+		return errors.PathAlreadyMounted(nil, absolute)
+	}
+
+	vfs.log.Debug("Mount: initializing mount at %s (readonly=%v dual=%v)", absolute, mnt.Options.ReadOnly, mnt.IsDualMount)
+	if err := mnt.Mount(ctx); err != nil {
+		vfs.log.Error("Mount: failed to mount %s backend at %s - %v", primary.Name(), absolute, err)
+		return data.ErrMountFailed
+	}
+
+	vfs.mnts[absolute] = mnt
+	vfs.log.Info("Mount: successfully mounted %s at %s", primary.Name(), absolute)
+	return nil
+}
+
+// Unmount removes the filesystem handler at the specified path.
+// Returns an error if the path is not mounted or has child mounts.
+func (vfs *VirtualFileSystem) Unmount(ctx context.Context, path string, force bool) error {
+	// Always start with an absolute path
+	absolute, err := data.ToAbsolutePath(path)
+	if err != nil {
+		vfs.log.Error("Unmount: failed to convert path to absolute: %s - %v", path, err)
+		return err
+	}
+
+	vfs.log.Debug("Unmount: unmounting %s (force=%v)", absolute, force)
+
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	mnt, exists := vfs.mnts[absolute]
+	if !exists {
+		vfs.log.Error("Unmount: path %s is not mounted", absolute)
+		return errors.PathNotMounted(nil, absolute)
+	}
+
+	if vfs.hasChildMounts(absolute) {
+		vfs.log.Error("Unmount: path %s has child mounts, cannot unmount", absolute)
+		return errors.PathMountBusy(nil, absolute)
+	}
+
+	vfs.log.Debug("Unmount: closing mount at %s", absolute)
+	if err := mnt.Unmount(ctx, force); err != nil {
+		vfs.log.Error("Unmount: failed to unmount %s - %v", absolute, err)
+		return data.ErrUnmountFailed
+	}
+
+	delete(vfs.mnts, absolute)
+	vfs.log.Info("Unmount: successfully unmounted %s", absolute)
+	return nil
+}
+
 // CreateDirectory creates a new directory at the specified path.
 // Returns an error if the directory already exists or cannot be created.
 func (vfs *VirtualFileSystem) CreateDirectory(ctx context.Context, path string) error {
@@ -692,365 +1060,169 @@ func (vfs *VirtualFileSystem) UnlinkFile(ctx context.Context, path string) error
 
 // Rename moves or renames a file or directory from oldPath to newPath.
 // Returns an error if the operation cannot be completed.
+// This implementation uses a copy-and-delete strategy which works across different mounts
+// but is not atomic and may not be optimal for large files.
 func (vfs *VirtualFileSystem) Rename(ctx context.Context, oldPath string, newPath string) error {
-	return fmt.Errorf("vfs: not implemented")
-}
-
-// ReadDirectory returns a list of entries in the directory at path.
-// Returns an error if the path is not a directory or doesn't exist.
-func (vfs *VirtualFileSystem) ReadDirectory(ctx context.Context, path string) ([]*data.VirtualFileMetadata, error) {
-	// Always start with an absolute path
-	absolute, err := data.ToAbsolutePath(path)
+	// Convert to absolute paths
+	oldAbsolute, err := data.ToAbsolutePath(oldPath)
 	if err != nil {
-		vfs.log.Error("ReadDirectory: failed to convert path to absolute: %s - %v", path, err)
-		return nil, err
+		vfs.log.Error("Rename: failed to convert oldPath to absolute: %s - %v", oldPath, err)
+		return err
 	}
 
-	vfs.log.Debug("ReadDirectory: path=%s", absolute)
-
-	mnt, err := vfs.getMountFromPath(absolute)
+	newAbsolute, err := data.ToAbsolutePath(newPath)
 	if err != nil {
-		vfs.log.Error("ReadDirectory: no mount found for path: %s - %v", absolute, err)
-		return nil, err
+		vfs.log.Error("Rename: failed to convert newPath to absolute: %s - %v", newPath, err)
+		return err
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	vfs.log.Debug("Rename: renaming %s to %s", oldAbsolute, newAbsolute)
 
-	// Use a map to track entries by key to avoid duplicates
-	metaMap := make(map[string]*data.VirtualFileMetadata)
-
-	// Try to get entries from metadata first if available
-	foundInMetadata := false
-	if mnt.Metadata != nil {
-		vfs.log.Debug("ReadDirectory: attempting to read from metadata backend for %s", absolute)
-		// Calculate the correct prefix for querying
-		prefix := relative
-		if prefix != "" {
-			prefix += "/"
-		}
-
-		query := &backend.MetadataQuery{
-			Prefix:    prefix,
-			Delimiter: "/", // Only return direct children, not entire tree
-			SortBy:    backend.SortByKey,
-			SortOrder: backend.SortAsc,
-		}
-
-		result, err := mnt.Metadata.QueryMeta(ctx, query)
-		if err != nil {
-			vfs.log.Error("ReadDirectory: metadata query failed for %s - %v", absolute, err)
-			return nil, err
-		}
-
-		if result != nil && result.TotalCount > 0 {
-			vfs.log.Debug("ReadDirectory: found %d entries in metadata for %s", result.TotalCount, absolute)
-			// Add all metadata entries to the map
-			// Strip the directory prefix from keys to make them relative
-			for _, meta := range result.Candidates {
-				// Clone metadata and adjust key to be relative to current directory
-				relativeMeta := meta.Clone()
-				if prefix != "" {
-					relativeMeta.Key = strings.TrimPrefix(meta.Key, prefix)
-				}
-				metaMap[relativeMeta.Key] = relativeMeta
-			}
-			foundInMetadata = true
-		} else {
-			vfs.log.Debug("ReadDirectory: no entries found in metadata for %s, will check object storage", absolute)
-		}
-	}
-
-	// If not found in metadata, or no metadata backend, fall back to storage
-	if !foundInMetadata {
-		vfs.log.Debug("ReadDirectory: reading from object storage backend for %s", absolute)
-		// Use storage backend to list objects
-		stats, err := mnt.ObjectStorage.ListObjects(ctx, relative)
-		if err != nil {
-			// If directory doesn't exist but we're at a mount point root, that's OK - just empty
-			if err == data.ErrNotExist && relative == "" {
-				vfs.log.Debug("ReadDirectory: empty mount root for %s, continuing with empty list", absolute)
-				// This is the root of a mount with no entries yet - continue with empty list
-			} else {
-				vfs.log.Error("ReadDirectory: object storage ListObjects failed for %s - %v", absolute, err)
-				return nil, err
-			}
-		} else {
-			vfs.log.Debug("ReadDirectory: found %d entries in object storage for %s", len(stats), absolute)
-			// Convert stats to metadata
-			// Calculate prefix for stripping (to make keys relative to current directory for display)
-			prefix := relative
-			if prefix != "" {
-				prefix += "/"
-			}
-
-			for _, stat := range stats {
-				meta := stat.ToMetadata()
-
-				// The stat.Key from storage is relative to the listed directory
-				// We need to prepend the directory path to get the full mount-relative key for metadata
-				fullKey := stat.Key
-				if relative != "" {
-					fullKey = relative + "/" + stat.Key
-				}
-
-				// Sync to metadata if available AND it's a separate backend instance
-				if mnt.Metadata != nil && !mnt.IsDualMount {
-					// Create a copy with the full mount-relative key for metadata storage
-					metaForSync := meta.Clone()
-					metaForSync.Key = fullKey
-					vfs.log.Debug("ReadDirectory: syncing entry %s to metadata", metaForSync.Key)
-					if err := mnt.Metadata.CreateMeta(ctx, metaForSync); err != nil {
-						vfs.log.Warn("ReadDirectory: failed to sync metadata for %s - %v (continuing)", metaForSync.Key, err)
-						continue // Ignore errors for existing metadata
-					}
-				}
-
-				// Use the relative key (just the name) for the directory listing result
-				relativeKey := stat.Key
-				relativeMeta := meta.Clone()
-				relativeMeta.Key = relativeKey
-				metaMap[relativeKey] = relativeMeta
-			}
-		}
-	}
-
-	// Inject virtual mount point entries
-	childMounts := vfs.getChildMounts(absolute)
-	if len(childMounts) > 0 {
-		vfs.log.Debug("ReadDirectory: injecting %d virtual mount points for %s", len(childMounts), absolute)
-	}
-	for _, mountPath := range childMounts {
-		// Extract the mount point name (last component of the path)
-		mountName := mountPath
-		if lastSlash := strings.LastIndex(mountPath, "/"); lastSlash >= 0 {
-			mountName = mountPath[lastSlash+1:]
-		}
-
-		// Calculate the relative key for this mount point
-		mountKey := relative
-		if mountKey != "" {
-			mountKey = mountKey + "/" + mountName
-		} else {
-			mountKey = mountName
-		}
-
-		// Only add if not already present (real directory takes precedence)
-		if _, exists := metaMap[mountKey]; !exists {
-			vfs.log.Debug("ReadDirectory: adding virtual mount point %s at %s", mountName, mountPath)
-			// Create virtual metadata for the mount point
-			now := time.Now()
-			metaMap[mountKey] = &data.VirtualFileMetadata{
-				ID:          mountPath, // Use mount path as ID
-				Key:         mountKey,
-				Mode:        data.ModeMount | data.ModeDir | 0755,
-				Size:        0,
-				AccessTime:  now,
-				ModifyTime:  now,
-				CreateTime:  now,
-				ContentType: "inode/directory",
-			}
-		} else {
-			vfs.log.Debug("ReadDirectory: mount point %s already exists as real directory", mountName)
-		}
-	}
-
-	// Convert map back to slice and sort by key
-	metas := make([]*data.VirtualFileMetadata, 0, len(metaMap))
-	for _, meta := range metaMap {
-		metas = append(metas, meta)
-	}
-
-	// Sort entries by key for consistent ordering
-	sort.Slice(metas, func(i, j int) bool {
-		return metas[i].Key < metas[j].Key
-	})
-
-	vfs.log.Info("ReadDirectory: successfully read %d entries from %s", len(metas), absolute)
-	return metas, nil
-}
-
-// Stat returns file information for the given path.
-// Returns an error if the path doesn't exist.
-func (vfs *VirtualFileSystem) StatMetadata(ctx context.Context, path string) (*data.VirtualFileMetadata, error) {
-	// Always start with an absolute path
-	absolute, err := data.ToAbsolutePath(path)
-	if err != nil {
-		vfs.log.Error("StatMetadata: failed to convert path to absolute: %s - %v", path, err)
-		return nil, err
-	}
-
-	vfs.log.Debug("StatMetadata: path=%s", absolute)
-
-	// Check if this path is itself a mount point
+	// Prevent renaming mount points
 	vfs.mu.RLock()
-	_, isMountPoint := vfs.mnts[absolute]
+	_, isMountPoint := vfs.mnts[oldAbsolute]
 	vfs.mu.RUnlock()
 
 	if isMountPoint {
-		vfs.log.Debug("StatMetadata: path %s is a mount point, returning virtual metadata", absolute)
-		// Return virtual metadata for the mount point itself
-		now := time.Now()
-		// Extract the mount point name (last component of the path)
-		mountName := absolute
-		if lastSlash := strings.LastIndex(absolute, "/"); lastSlash >= 0 && lastSlash < len(absolute)-1 {
-			mountName = absolute[lastSlash+1:]
-		} else if absolute == "/" {
-			mountName = ""
-		}
-
-		return &data.VirtualFileMetadata{
-			ID:          absolute,
-			Key:         mountName,
-			Mode:        data.ModeMount | data.ModeDir | 0755,
-			Size:        0,
-			AccessTime:  now,
-			ModifyTime:  now,
-			CreateTime:  now,
-			ContentType: "inode/directory",
-		}, nil
+		vfs.log.Error("Rename: cannot rename mount point %s", oldAbsolute)
+		return errors.PathMountBusy(nil, oldAbsolute)
 	}
 
-	mnt, err := vfs.getMountFromPath(absolute)
+	// Get stat for old path to check existence and type
+	oldStat, err := vfs.StatMetadata(ctx, oldAbsolute)
 	if err != nil {
-		vfs.log.Error("StatMetadata: no mount found for path: %s - %v", absolute, err)
-		return nil, err
+		vfs.log.Error("Rename: source path %s does not exist - %v", oldAbsolute, err)
+		return err
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
-	// We need to determine if the file exists
-	if mnt.Metadata != nil {
-		vfs.log.Debug("StatMetadata: querying metadata backend for %s", absolute)
-		// Try to read info from metadata
-		meta, err := mnt.Metadata.ReadMeta(ctx, relative)
+	// Check if newPath already exists
+	if exists, _ := vfs.LookupMetadata(ctx, newAbsolute); exists {
+		vfs.log.Error("Rename: destination path %s already exists", newAbsolute)
+		return data.ErrExist
+	}
+
+	// Handle based on type
+	if oldStat.Mode.IsDir() {
+		vfs.log.Debug("Rename: renaming directory %s to %s", oldAbsolute, newAbsolute)
+		return vfs.renameDirectory(ctx, oldAbsolute, newAbsolute)
+	}
+
+	// Handle file rename
+	vfs.log.Debug("Rename: renaming file %s to %s (size=%d)", oldAbsolute, newAbsolute, oldStat.Size)
+	return vfs.renameFile(ctx, oldAbsolute, newAbsolute, oldStat)
+}
+
+// renameFile performs a copy-and-delete rename for a single file.
+func (vfs *VirtualFileSystem) renameFile(ctx context.Context, oldPath string, newPath string, oldStat *data.VirtualFileMetadata) error {
+	// Handle empty files specially
+	if oldStat.Size == 0 {
+		vfs.log.Debug("renameFile: creating empty file at %s", newPath)
+		// Just create an empty file at the destination
+		_, err := vfs.OpenFile(ctx, newPath, data.AccessModeCreate|data.AccessModeWrite)
 		if err != nil {
-			// Fail if any error except NotExists
-			if err != data.ErrNotExist {
-				vfs.log.Error("StatMetadata: metadata read failed for %s - %v", absolute, err)
-				return nil, err
-			}
-			vfs.log.Debug("StatMetadata: metadata not found for %s, falling back to object storage", absolute)
-		} else {
-			vfs.log.Debug("StatMetadata: found in metadata (size=%d mode=%s)", meta.Size, meta.Mode)
-			return meta, nil
+			vfs.log.Error("renameFile: failed to create destination file %s - %v", newPath, err)
+			return err
+		}
+		if err := vfs.CloseFile(ctx, newPath, false); err != nil {
+			vfs.log.Error("renameFile: failed to close destination file %s - %v", newPath, err)
+			return err
 		}
 	} else {
-		vfs.log.Debug("StatMetadata: no metadata backend, using object storage for %s", absolute)
-	}
-	// Fallback to storage to read object stats
-	vfs.log.Debug("StatMetadata: querying object storage backend for %s", absolute)
-	stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
-	if err != nil {
-		vfs.log.Error("StatMetadata: object storage HeadObject failed for %s - %v", absolute, err)
-		return nil, err
-	}
-	vfs.log.Debug("StatMetadata: found in object storage (size=%d mode=%s)", stat.Size, stat.Mode)
-	// Convert object stats to metadata
-	meta := stat.ToMetadata()
-	if !mnt.IsDualMount && mnt.Metadata != nil {
-		vfs.log.Debug("StatMetadata: syncing object stat to metadata for %s", absolute)
-		// Write stat back into metadata
-		if err := mnt.Metadata.CreateMeta(ctx, meta); err != nil {
-			vfs.log.Warn("StatMetadata: failed to sync metadata for %s - %v", absolute, err)
-			return nil, err
+		// Read entire file content
+		vfs.log.Debug("renameFile: reading %d bytes from %s", oldStat.Size, oldPath)
+		contents, err := vfs.ReadFile(ctx, oldPath, 0, oldStat.Size)
+		if err != nil {
+			vfs.log.Error("renameFile: failed to read source file %s - %v", oldPath, err)
+			return err
+		}
+
+		// Create destination file
+		vfs.log.Debug("renameFile: creating destination file %s", newPath)
+		_, err = vfs.OpenFile(ctx, newPath, data.AccessModeCreate|data.AccessModeWrite)
+		if err != nil {
+			vfs.log.Error("renameFile: failed to create destination file %s - %v", newPath, err)
+			return err
+		}
+
+		// Write data to destination
+		vfs.log.Debug("renameFile: writing %d bytes to %s", len(contents), newPath)
+		n, err := vfs.WriteFile(ctx, newPath, 0, contents)
+		if err != nil {
+			vfs.log.Error("renameFile: failed to write to destination file %s - %v", newPath, err)
+			// Clean up partial file
+			vfs.CloseFile(ctx, newPath, true)
+			vfs.UnlinkFile(ctx, newPath)
+			return err
+		}
+
+		vfs.log.Debug("renameFile: wrote %d bytes to %s", n, newPath)
+
+		// Close destination file
+		if err := vfs.CloseFile(ctx, newPath, false); err != nil {
+			vfs.log.Error("renameFile: failed to close destination file %s - %v", newPath, err)
+			return err
 		}
 	}
 
-	return meta, nil
-}
-
-// Chmod changes the mode (permissions) of the file at path.
-// Returns an error if the operation is not supported or fails.
-func (vfs *VirtualFileSystem) ChangeMode(ctx context.Context, path string, mode data.VirtualFileMode) error {
-	return fmt.Errorf("vfs: not implemented")
-}
-
-// Mount attaches a filesystem handler at the specified path.
-// Options can be used to configure the mount (e.g., read-only).
-func (vfs *VirtualFileSystem) Mount(ctx context.Context, path string, primary backend.VirtualObjectStorageBackend, opts ...mount.MountOption) error {
-	// Always start with an absolute path
-	absolute, err := data.ToAbsolutePath(path)
-	if err != nil {
-		vfs.log.Error("Mount: failed to convert path to absolute: %s - %v", path, err)
+	// Delete source file
+	vfs.log.Debug("renameFile: deleting source file %s", oldPath)
+	if err := vfs.UnlinkFile(ctx, oldPath); err != nil {
+		vfs.log.Error("renameFile: failed to delete source file %s - %v", oldPath, err)
+		// Note: destination file exists, but source couldn't be deleted - partial state
 		return err
 	}
 
-	vfs.log.Debug("Mount: mounting %s backend at %s", primary.Name(), absolute)
-
-	if len(absolute) == 0 {
-		vfs.log.Error("Mount: invalid empty path")
-		return errors.InvalidPath(nil, absolute)
-	}
-	// Check if parent mount denies nesting BEFORE acquiring write lock
-	if parent, err := vfs.getMountFromPath(absolute); err == nil {
-		if !parent.Options.Nesting {
-			vfs.log.Error("Mount: parent mount at %s denies nesting", parent.Path)
-			return errors.PathMountNestingDenied(nil, parent.Path)
-		}
-		vfs.log.Debug("Mount: parent mount at %s allows nesting", parent.Path)
-	}
-
-	vfs.mu.Lock()
-	defer vfs.mu.Unlock()
-
-	name := fmt.Sprintf("mount/%s", primary.Name())
-	log := vfs.log.Named(name)
-
-	mnt, err := mount.NewMountInfo(path, log, primary, opts...)
-	if err != nil {
-		vfs.log.Error("Mount: failed to create mount info for %s - %v", absolute, err)
-		return err
-	}
-
-	if _, exists := vfs.mnts[absolute]; exists {
-		vfs.log.Error("Mount: path %s is already mounted", absolute)
-		return errors.PathAlreadyMounted(nil, absolute)
-	}
-
-	vfs.log.Debug("Mount: initializing mount at %s (readonly=%v dual=%v)", absolute, mnt.Options.ReadOnly, mnt.IsDualMount)
-	if err := mnt.Mount(ctx); err != nil {
-		vfs.log.Error("Mount: failed to mount %s backend at %s - %v", primary.Name(), absolute, err)
-		return data.ErrMountFailed
-	}
-
-	vfs.mnts[absolute] = mnt
-	vfs.log.Info("Mount: successfully mounted %s at %s", primary.Name(), absolute)
+	vfs.log.Info("renameFile: successfully renamed file %s to %s", oldPath, newPath)
 	return nil
 }
 
-// Unmount removes the filesystem handler at the specified path.
-// Returns an error if the path is not mounted or has child mounts.
-func (vfs *VirtualFileSystem) Unmount(ctx context.Context, path string, force bool) error {
-	// Always start with an absolute path
-	absolute, err := data.ToAbsolutePath(path)
-	if err != nil {
-		vfs.log.Error("Unmount: failed to convert path to absolute: %s - %v", path, err)
+// renameDirectory performs a recursive copy-and-delete rename for a directory.
+func (vfs *VirtualFileSystem) renameDirectory(ctx context.Context, oldPath string, newPath string) error {
+	// Create the destination directory
+	vfs.log.Debug("renameDirectory: creating destination directory %s", newPath)
+	if err := vfs.CreateDirectory(ctx, newPath); err != nil {
+		vfs.log.Error("renameDirectory: failed to create destination directory %s - %v", newPath, err)
 		return err
 	}
 
-	vfs.log.Debug("Unmount: unmounting %s (force=%v)", absolute, force)
-
-	vfs.mu.Lock()
-	defer vfs.mu.Unlock()
-
-	mnt, exists := vfs.mnts[absolute]
-	if !exists {
-		vfs.log.Error("Unmount: path %s is not mounted", absolute)
-		return errors.PathNotMounted(nil, absolute)
+	// Read all entries in the source directory
+	vfs.log.Debug("renameDirectory: reading entries from %s", oldPath)
+	entries, err := vfs.ReadDirectory(ctx, oldPath)
+	if err != nil {
+		vfs.log.Error("renameDirectory: failed to read source directory %s - %v", oldPath, err)
+		return err
 	}
 
-	if vfs.hasChildMounts(absolute) {
-		vfs.log.Error("Unmount: path %s has child mounts, cannot unmount", absolute)
-		return errors.PathMountBusy(nil, absolute)
+	vfs.log.Debug("renameDirectory: found %d entries in %s", len(entries), oldPath)
+
+	// Recursively rename each entry
+	for _, entry := range entries {
+		// Skip mount points
+		if entry.Mode&data.ModeMount != 0 {
+			vfs.log.Debug("renameDirectory: skipping mount point %s", entry.Key)
+			continue
+		}
+
+		oldEntryPath := oldPath + "/" + entry.Key
+		newEntryPath := newPath + "/" + entry.Key
+
+		vfs.log.Debug("renameDirectory: processing entry %s", entry.Key)
+
+		// Recursively rename subdirectories and files
+		if err := vfs.Rename(ctx, oldEntryPath, newEntryPath); err != nil {
+			vfs.log.Error("renameDirectory: failed to rename entry %s - %v", entry.Key, err)
+			return err
+		}
 	}
 
-	vfs.log.Debug("Unmount: closing mount at %s", absolute)
-	if err := mnt.Unmount(ctx, force); err != nil {
-		vfs.log.Error("Unmount: failed to unmount %s - %v", absolute, err)
-		return data.ErrUnmountFailed
+	// Remove the empty source directory
+	vfs.log.Debug("renameDirectory: removing source directory %s", oldPath)
+	if err := vfs.RemoveDirectory(ctx, oldPath, false); err != nil {
+		vfs.log.Error("renameDirectory: failed to remove source directory %s - %v", oldPath, err)
+		return err
 	}
 
-	delete(vfs.mnts, absolute)
-	vfs.log.Info("Unmount: successfully unmounted %s", absolute)
+	vfs.log.Info("renameDirectory: successfully renamed directory %s to %s", oldPath, newPath)
 	return nil
 }
 
@@ -1107,17 +1279,6 @@ func (vfs *VirtualFileSystem) Close(ctx context.Context) error {
 	}
 
 	return lastErr
-}
-
-// Lookup checks if a file or directory exists at the given path.
-// Returns true if the path exists, false otherwise.
-func (vfs *VirtualFileSystem) Lookup(ctx context.Context, path string) (bool, error) {
-	meta, err := vfs.StatMetadata(ctx, path)
-	if err != nil {
-		return false, nil
-	}
-
-	return (meta != nil), nil
 }
 
 func (vfs *VirtualFileSystem) getMountFromPath(path string) (*mount.Mount, error) {

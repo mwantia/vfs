@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/mwantia/vfs"
@@ -11,6 +12,7 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 	"github.com/mwantia/vfs/mount/backend/local"
 	"github.com/mwantia/vfs/mount/backend/memory"
+	"github.com/mwantia/vfs/mount/backend/postgres"
 	"github.com/mwantia/vfs/mount/backend/sqlite"
 )
 
@@ -19,7 +21,7 @@ type TestBackendFactory func(t *testing.T) (backend.VirtualObjectStorageBackend,
 
 // GetTestBackendFactories returns all backend implementations to test.
 func GetTestBackendFactories() map[string]TestBackendFactory {
-	return map[string]TestBackendFactory{
+	factories := map[string]TestBackendFactory{
 		"memory": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
 			return memory.NewMemoryBackend(), nil
 		},
@@ -30,6 +32,16 @@ func GetTestBackendFactories() map[string]TestBackendFactory {
 			return local.NewLocalBackend(t.TempDir()), nil
 		},
 	}
+
+	// Add Postgres backend if connection string is provided via environment variable
+	// Example: export VFS_TEST_POSTGRES="postgres://user:pass@localhost:5432/vfs_test"
+	if connStr := os.Getenv("VFS_TEST_POSTGRES"); connStr != "" {
+		factories["postgres"] = func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
+			return postgres.NewPostgresBackend(connStr)
+		}
+	}
+
+	return factories
 }
 
 // TestAllBackends_FileOperations verifies basic file create, write, and read operations

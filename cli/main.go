@@ -7,14 +7,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mwantia/vfs"
-	"github.com/mwantia/vfs/backend/memory"
-	"github.com/mwantia/vfs/backend/s3"
-	"github.com/mwantia/vfs/backend/sqlite"
 	"github.com/mwantia/vfs/command"
 	"github.com/mwantia/vfs/command/builtin"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/log"
 	"github.com/mwantia/vfs/mount"
+	"github.com/mwantia/vfs/mount/backend/memory"
+	"github.com/mwantia/vfs/mount/backend/postgres"
+	"github.com/mwantia/vfs/mount/backend/s3"
 
 	"github.com/mwantia/vfs/cli/tui"
 )
@@ -33,34 +33,32 @@ func setupDemoVFS(ctx context.Context) (*vfs.VirtualFileSystem, error) {
 	}
 
 	// Only mount S3 backends if credentials are provided via environment variables
+	connString := os.Getenv("VFS_DEMO_METADATA")
 	endpoint := os.Getenv("VFS_DEMO_ENDPOINT")
 	accessKey := os.Getenv("VFS_DEMO_ACCESS_KEY")
 	secretKey := os.Getenv("VFS_DEMO_SECRET_KEY")
 
-	if endpoint != "" && accessKey != "" && secretKey != "" {
-		gosyncMetadata, err := sqlite.NewSQLiteBackend("test/gosync.db")
+	if connString != "" && endpoint != "" && accessKey != "" && secretKey != "" {
+		metadata, err := postgres.NewPostgresBackend(connString)
 		if err != nil {
 			return nil, err
 		}
+
 		gosync, err := s3.NewS3Backend(endpoint, "gosync-storage", accessKey, secretKey, true)
 		if err != nil {
 			return nil, err
 		}
 
-		if err := fs.Mount(ctx, "/gosync", gosync, mount.AsReadOnly(), mount.WithMetadata(gosyncMetadata)); err != nil {
+		if err := fs.Mount(ctx, "/gosync", gosync, mount.AsReadOnly(), mount.WithMetadata(metadata)); err != nil {
 			return nil, fmt.Errorf("failed to mount: %w", err)
 		}
 
-		globalMetadata, err := sqlite.NewSQLiteBackend("test/global.db")
-		if err != nil {
-			return nil, err
-		}
 		global, err := s3.NewS3Backend(endpoint, "global-storage", accessKey, secretKey, true)
 		if err != nil {
 			return nil, err
 		}
 
-		if err := fs.Mount(ctx, "/global", global, mount.AsReadOnly(), mount.WithMetadata(globalMetadata)); err != nil {
+		if err := fs.Mount(ctx, "/global", global, mount.AsReadOnly()); err != nil {
 			return nil, fmt.Errorf("failed to mount: %w", err)
 		}
 	}
