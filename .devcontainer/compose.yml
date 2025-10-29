@@ -2,7 +2,7 @@ services:
   devcontainer:
     build: .
   environment:
-    - CONSUL_HTTP_ADDR=http://consul:8500
+    CONSUL_HTTP_ADDR: 'http://consul:8500'
 
   redis:
     image: redis:latest
