@@ -1,0 +1,8 @@
+.dockerignore
+
+# Container README file
+README.md
+
+# Docker Compose and Developer files
+compose.yml
+devcontainer.json
