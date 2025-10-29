@@ -65,5 +65,6 @@ func (mb *MemoryBackend) GetCapabilities() *backend.VirtualBackendCapabilities {
 			backend.CapabilityObjectStorage,
 			backend.CapabilityMetadata,
 		},
+		MaxObjectSize: 10485760, // 10 MB
 	}
 }

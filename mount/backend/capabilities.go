@@ -41,7 +41,9 @@ func GetAllCapabilities() *VirtualBackendCapabilities {
 
 // VirtualBackendCapabilities describes what a backend supports
 type VirtualBackendCapabilities struct {
-	Capabilities []VirtualBackendCapability
+	Capabilities  []VirtualBackendCapability `json:"capabilities"`
+	MinObjectSize int64                      `json:"min_object_size"`
+	MaxObjectSize int64                      `json:"max_object_size"`
 }
 
 // Contains checks if a capability is supported

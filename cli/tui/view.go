@@ -16,6 +16,8 @@ func (m *Model) View() string {
 	switch m.mode {
 	case ModeHelp:
 		return m.renderHelp()
+	case ModeTerminal:
+		return m.renderTerminalView()
 	default:
 		return m.renderMain()
 	}
@@ -34,14 +36,9 @@ func (m *Model) renderMain() string {
 	// Status bar
 	sections = append(sections, m.renderStatus())
 
-	// Input area (if in input/command mode)
-	if m.mode == ModeCommand || m.mode == ModeInput {
+	// Input area (if in non-terminal input mode)
+	if m.mode == ModeInput {
 		sections = append(sections, m.renderInput())
-	}
-
-	// Command output
-	if m.commandOut != "" {
-		sections = append(sections, m.renderCommandOutput())
 	}
 
 	// Help bar
@@ -216,7 +213,7 @@ func (m *Model) renderStatus() string {
 
 // renderInput renders the input field for commands or user input
 func (m *Model) renderInput() string {
-	prompt := "> "
+	prompt := ""
 	if m.mode == ModeCommand {
 		prompt = ": "
 	}
@@ -225,23 +222,82 @@ func (m *Model) renderInput() string {
 	return m.theme.CommandStyle.Render(input)
 }
 
-// renderCommandOutput renders command execution output
-func (m *Model) renderCommandOutput() string {
-	if m.commandOut == "" {
-		return ""
+// renderTerminalView renders the full-screen terminal mode
+func (m *Model) renderTerminalView() string {
+	var sections []string
+
+	// Title bar
+	title := m.theme.TitleStyle.Render("VFS Terminal - Press # to return to Navigation")
+	sections = append(sections, title)
+
+	// Terminal content
+	sections = append(sections, m.renderTerminalContent())
+
+	// Help bar
+	sections = append(sections, m.renderHelpBar())
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// renderTerminalContent renders the terminal history and input
+func (m *Model) renderTerminalContent() string {
+	availableHeight := m.height - 6 // Reserve for title, help, padding
+
+	var lines []string
+
+	// Render all terminal history entries
+	for _, entry := range m.terminalHistory {
+		// Command prompt line: [0] /demo # ls
+		promptLine := fmt.Sprintf("[%d] %s > %s",
+			entry.Number,
+			m.theme.DirectoryStyle.Render(entry.Path),
+			entry.Command,
+		)
+		lines = append(lines, promptLine)
+
+		// Output
+		if entry.Output != "" {
+			outputLines := strings.Split(strings.TrimSuffix(entry.Output, "\n"), "\n")
+			lines = append(lines, outputLines...)
+		}
+
+		// Error
+		if entry.Error != "" {
+			errorLine := m.theme.ErrorStyle.Render("Error: " + entry.Error)
+			lines = append(lines, errorLine)
+		}
+
+		// Empty line between entries
+		lines = append(lines, "")
 	}
 
-	output := "Command Output:\n" + m.commandOut
-	maxLines := 5
-	lines := strings.Split(output, "\n")
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-		lines = append(lines, "...")
+	// Current input prompt
+	currentPrompt := fmt.Sprintf("[%d] %s %s",
+		m.commandCounter,
+		m.theme.DirectoryStyle.Render(m.currentPath),
+		m.textInput.View(),
+	)
+	lines = append(lines, currentPrompt)
+
+	// Apply scroll offset and limit to available height
+	totalLines := len(lines)
+	startLine := 0
+	if totalLines > availableHeight {
+		// Show most recent lines by default (scroll offset of 0)
+		startLine = max(totalLines-availableHeight+m.terminalOffset, 0)
+		endLine := startLine + availableHeight
+		if endLine > totalLines {
+			endLine = totalLines
+		}
+		lines = lines[startLine:endLine]
 	}
 
-	return m.theme.PreviewBorderStyle.
+	content := strings.Join(lines, "\n")
+
+	return m.theme.BorderStyle.
 		Width(m.width - 4).
-		Render(strings.Join(lines, "\n"))
+		Height(availableHeight).
+		Render(content)
 }
 
 // renderHelpBar renders the bottom help bar
@@ -288,10 +344,11 @@ func (m *Model) renderHelp() string {
 	sections = append(sections, "  Ctrl+R     Refresh current directory")
 	sections = append(sections, "")
 
-	// Command Mode
-	sections = append(sections, m.theme.TitleStyle.Render("Command Mode:"))
-	sections = append(sections, "  :          Enter command mode")
-	sections = append(sections, "             (Execute VFS commands in current directory)")
+	// Terminal
+	sections = append(sections, m.theme.TitleStyle.Render("Terminal:"))
+	sections = append(sections, "  #          Toggle terminal window")
+	sections = append(sections, "             (Execute VFS commands)")
+	sections = append(sections, "  Esc        Exit terminal input (terminal stays open)")
 	sections = append(sections, "")
 
 	// Application

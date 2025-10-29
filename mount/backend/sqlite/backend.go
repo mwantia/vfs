@@ -147,5 +147,6 @@ func (sb *SQLiteBackend) GetCapabilities() *backend.VirtualBackendCapabilities {
 			backend.CapabilityObjectStorage,
 			backend.CapabilityMetadata,
 		},
+		MaxObjectSize: 5242880, // 5 MB
 	}
 }

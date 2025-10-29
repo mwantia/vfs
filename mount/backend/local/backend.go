@@ -66,6 +66,9 @@ func (lb *LocalBackend) GetCapabilities() *backend.VirtualBackendCapabilities {
 		Capabilities: []backend.VirtualBackendCapability{
 			backend.CapabilityObjectStorage,
 		},
+		// Local filesystem limits vary by OS/filesystem, but we set a practical limit
+		// of 10GB for typical VFS use cases. Adjust as needed for your requirements.
+		MaxObjectSize: 10737418240, // 10 GB
 	}
 }
 

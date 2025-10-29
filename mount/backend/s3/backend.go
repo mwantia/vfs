@@ -68,5 +68,8 @@ func (sb *S3Backend) GetCapabilities() *backend.VirtualBackendCapabilities {
 		Capabilities: []backend.VirtualBackendCapability{
 			backend.CapabilityObjectStorage,
 		},
+		// S3 supports objects from 0 bytes to 5TB, but we set a practical limit of 5GB
+		// for typical VFS use cases. Adjust as needed for your requirements.
+		MaxObjectSize: 5368709120, // 5 GB
 	}
 }

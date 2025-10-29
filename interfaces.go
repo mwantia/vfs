@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"context"
+	"io"
 
 	"github.com/mwantia/vfs/cmd"
 	"github.com/mwantia/vfs/data"
@@ -27,8 +28,8 @@ type VirtualFileSystem interface {
 	// UnregisterCommand
 	UnregisterCommand(name string) (bool, error)
 
-	// Execute
-	Execute(ctx context.Context, args ...string) (int, error)
+	// Execute runs a command with the given arguments, writing output to the provided writer
+	Execute(ctx context.Context, writer io.Writer, args ...string) (int, error)
 
 	// Mount attaches a filesystem handler at the specified path.
 	// Options can be used to configure the mount (e.g., read-only).

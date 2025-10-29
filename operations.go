@@ -282,6 +282,26 @@ func (vfs *virtualFileSystemImpl) ReadFile(ctx context.Context, path string, off
 	return buffer[:n], nil
 }
 
+// validateObjectSize checks if the object size is within the backend's allowed limits.
+// Returns an error if the size violates MinObjectSize or MaxObjectSize constraints.
+func (vfs *virtualFileSystemImpl) validateObjectSize(mnt *mount.Mount, size int64) error {
+	caps := mnt.ObjectStorage.GetCapabilities()
+
+	// Check minimum size if set (0 means no minimum)
+	if caps.MinObjectSize > 0 && size < caps.MinObjectSize {
+		vfs.log.Error("validateObjectSize: object size %d bytes is below minimum %d bytes", size, caps.MinObjectSize)
+		return errors.BackendObjectTooSmall(nil, size, caps.MinObjectSize)
+	}
+
+	// Check maximum size if set (0 means no maximum)
+	if caps.MaxObjectSize > 0 && size > caps.MaxObjectSize {
+		vfs.log.Error("validateObjectSize: object size %d bytes exceeds maximum %d bytes", size, caps.MaxObjectSize)
+		return errors.BackendObjectTooLarge(nil, size, caps.MaxObjectSize)
+	}
+
+	return nil
+}
+
 // Write writes data to the file at path starting at offset.
 // Returns the number of bytes written or an error if the operation fails.
 func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, offset int64, buffer []byte) (int, error) {
@@ -306,6 +326,8 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 	}
 
 	relative := data.ToRelativePath(absolute, mnt.Path)
+
+	var currentSize int64
 	// Read metadata info if available
 	if mnt.Metadata != nil {
 		vfs.log.Debug("WriteFile: validating file using metadata for %s", absolute)
@@ -339,6 +361,7 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 			vfs.log.Error("WriteFile: cannot write to directory %s", absolute)
 			return 0, data.ErrIsDirectory
 		}
+		currentSize = meta.Size
 	} else {
 		vfs.log.Debug("WriteFile: validating file using object storage for %s", absolute)
 		// Fallback to storage to read object stats
@@ -352,6 +375,21 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 			vfs.log.Error("WriteFile: cannot write to directory %s", absolute)
 			return 0, data.ErrIsDirectory
 		}
+		currentSize = stat.Size
+	}
+
+	// Calculate the final size after this write
+	newSize := offset + int64(len(buffer))
+	if currentSize > newSize {
+		// If writing in the middle of a file, the size doesn't change
+		newSize = currentSize
+	}
+
+	// Validate the size against backend capabilities
+	vfs.log.Debug("WriteFile: validating size (current=%d new=%d) for %s", currentSize, newSize, absolute)
+	if err := vfs.validateObjectSize(mnt, newSize); err != nil {
+		vfs.log.Error("WriteFile: size validation failed for %s - %v", absolute, err)
+		return 0, err
 	}
 
 	vfs.log.Debug("WriteFile: writing to object storage for %s", absolute)

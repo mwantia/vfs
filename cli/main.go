@@ -10,8 +10,8 @@ import (
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/log"
 	"github.com/mwantia/vfs/mount"
+	"github.com/mwantia/vfs/mount/backend/consul"
 	"github.com/mwantia/vfs/mount/backend/memory"
-	"github.com/mwantia/vfs/mount/backend/postgres"
 	"github.com/mwantia/vfs/mount/backend/s3"
 
 	"github.com/mwantia/vfs/cli/tui"
@@ -30,24 +30,17 @@ func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 		return nil, fmt.Errorf("failed to mount: %w", err)
 	}
 
-	// Only mount S3 backends if credentials are provided via environment variables
-	connString := os.Getenv("VFS_DEMO_METADATA")
 	endpoint := os.Getenv("VFS_DEMO_ENDPOINT")
 	accessKey := os.Getenv("VFS_DEMO_ACCESS_KEY")
 	secretKey := os.Getenv("VFS_DEMO_SECRET_KEY")
 
-	if connString != "" && endpoint != "" && accessKey != "" && secretKey != "" {
-		metadata, err := postgres.NewPostgresBackend(connString)
-		if err != nil {
-			return nil, err
-		}
-
+	if endpoint != "" && accessKey != "" && secretKey != "" {
 		gosync, err := s3.NewS3Backend(endpoint, "gosync-storage", accessKey, secretKey, true)
 		if err != nil {
 			return nil, err
 		}
 
-		if err := fs.Mount(ctx, "/gosync", gosync, mount.AsReadOnly(), mount.WithMetadata(metadata)); err != nil {
+		if err := fs.Mount(ctx, "/gosync", gosync, mount.AsReadOnly(), mount.DisableAuto()); err != nil {
 			return nil, fmt.Errorf("failed to mount: %w", err)
 		}
 
@@ -56,7 +49,23 @@ func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 			return nil, err
 		}
 
-		if err := fs.Mount(ctx, "/global", global, mount.AsReadOnly()); err != nil {
+		if err := fs.Mount(ctx, "/global", global, mount.AsReadOnly(), mount.DisableAuto()); err != nil {
+			return nil, fmt.Errorf("failed to mount: %w", err)
+		}
+	}
+
+	consulAddr := os.Getenv("CONSUL_HTTP_ADDR")
+	consulToken := os.Getenv("CONSUL_HTTP_TOKEN")
+
+	if consulAddr != "" && consulToken != "" {
+		consul, err := consul.NewConsulBackend(&consul.ConsulBackendConfig{
+			Address: consulAddr,
+			Token:   consulToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := fs.Mount(ctx, "/consul", consul, mount.AsReadOnly(), mount.DisableAuto()); err != nil {
 			return nil, fmt.Errorf("failed to mount: %w", err)
 		}
 	}

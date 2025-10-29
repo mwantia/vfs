@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"io"
 
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount"
@@ -78,8 +79,9 @@ type Command interface {
 	Usage() string
 
 	// Execute runs the command with parsed arguments
+	// The writer parameter is where command output should be written
 	// Returns exit code (0 = success) and error message
-	Execute(ctx context.Context, api API, args *CommandArgs) (int, error)
+	Execute(ctx context.Context, api API, args *CommandArgs, writer io.Writer) (int, error)
 
 	// GetFlags returns the flag set for this command (this is optional)
 	GetFlags() *CommandFlagSet

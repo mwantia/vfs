@@ -3,6 +3,7 @@ package vfs
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/mwantia/vfs/cmd"
 )
@@ -40,7 +41,7 @@ func (vfs *virtualFileSystemImpl) UnregisterCommand(name string) (bool, error) {
 	return true, nil
 }
 
-func (vfs *virtualFileSystemImpl) Execute(ctx context.Context, args ...string) (int, error) {
+func (vfs *virtualFileSystemImpl) Execute(ctx context.Context, writer io.Writer, args ...string) (int, error) {
 	if len(args) == 0 {
 		return 1, fmt.Errorf("no command specified")
 	}
@@ -69,5 +70,5 @@ func (vfs *virtualFileSystemImpl) Execute(ctx context.Context, args ...string) (
 		return 1, fmt.Errorf("parse error: %w", err)
 	}
 
-	return c.Execute(ctx, vfs, parsedArgs)
+	return c.Execute(ctx, vfs, parsedArgs, writer)
 }

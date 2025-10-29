@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/data/errors"
 	"github.com/mwantia/vfs/log"
 )
 
@@ -138,6 +139,8 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 		return 0, ms.ctx.Err()
 	default:
 	}
+	// Get current file size for validation
+	var currentSize int64
 	// Validate using metadata first if available
 	if ms.mnt.Metadata != nil {
 		ms.log.Debug("Write: validating file using metadata for %s", ms.path)
@@ -166,6 +169,44 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 			ms.log.Error("Write: cannot write to directory %s", ms.path)
 			return 0, data.ErrIsDirectory
 		}
+		currentSize = meta.Size
+	} else {
+		// No metadata backend - get size from object storage
+		ms.log.Debug("Write: getting file size from object storage for %s", ms.path)
+		stat, statErr := ms.mnt.ObjectStorage.HeadObject(ms.ctx, ms.path)
+		if statErr != nil {
+			ms.log.Error("Write: failed to read object stat for %s - %v", ms.path, statErr)
+			return 0, statErr
+		}
+		// Validate it's not a directory
+		if stat.Mode.IsDir() {
+			ms.log.Error("Write: cannot write to directory %s", ms.path)
+			return 0, data.ErrIsDirectory
+		}
+		currentSize = stat.Size
+	}
+
+	// Calculate the final size after this write
+	newSize := ms.offset + int64(len(p))
+	if currentSize > newSize {
+		// If writing in the middle of a file, the size doesn't change
+		newSize = currentSize
+	}
+
+	// Validate the size against backend capabilities
+	caps := ms.mnt.ObjectStorage.GetCapabilities()
+	ms.log.Debug("Write: validating size (current=%d new=%d) for %s", currentSize, newSize, ms.path)
+
+	// Check minimum size if set (0 means no minimum)
+	if caps.MinObjectSize > 0 && newSize < caps.MinObjectSize {
+		ms.log.Error("Write: object size %d bytes is below minimum %d bytes for %s", newSize, caps.MinObjectSize, ms.path)
+		return 0, errors.BackendObjectTooSmall(nil, newSize, caps.MinObjectSize)
+	}
+
+	// Check maximum size if set (0 means no maximum)
+	if caps.MaxObjectSize > 0 && newSize > caps.MaxObjectSize {
+		ms.log.Error("Write: object size %d bytes exceeds maximum %d bytes for %s", newSize, caps.MaxObjectSize, ms.path)
+		return 0, errors.BackendObjectTooLarge(nil, newSize, caps.MaxObjectSize)
 	}
 
 	// Write to storage backend

@@ -20,6 +20,7 @@ const (
 	ModeCommand
 	ModeInput
 	ModeHelp
+	ModeTerminal
 )
 
 // InputType represents what kind of input we're collecting
@@ -32,6 +33,15 @@ const (
 	InputDelete
 	InputCommand
 )
+
+// TerminalEntry represents a single command execution in terminal history
+type TerminalEntry struct {
+	Number  int    // Command number [0], [1], etc.
+	Path    string // Directory where command was executed
+	Command string // The command that was executed
+	Output  string // Command output
+	Error   string // Error message if any
+}
 
 // Model represents the state of the TUI application
 type Model struct {
@@ -71,6 +81,11 @@ type Model struct {
 	errorMsg   string
 	commandOut string
 
+	// Terminal
+	terminalHistory []*TerminalEntry
+	terminalOffset  int // Scroll offset in terminal view
+	commandCounter  int // Counter for command numbering
+
 	// Clipboard
 	clipboard string
 
@@ -81,19 +96,21 @@ type Model struct {
 // NewModel creates a new TUI model
 func NewModel(adapter *VFSAdapter) *Model {
 	ti := textinput.New()
-	ti.Placeholder = "Enter command..."
+	ti.Placeholder = ""
 	ti.CharLimit = 256
 
 	return &Model{
-		adapter: adapter,
-		//cmd:          cmd,
-		theme:        DefaultTheme(),
-		keys:         DefaultKeyMap(),
-		help:         help.New(),
-		currentPath:  "/",
-		showPreview:  true,
-		textInput:    ti,
-		showFullHelp: false,
+		adapter:         adapter,
+		theme:           DefaultTheme(),
+		keys:            DefaultKeyMap(),
+		help:            help.New(),
+		currentPath:     "/",
+		showPreview:     true,
+		textInput:       ti,
+		showFullHelp:    false,
+		terminalHistory: make([]*TerminalEntry, 0),
+		commandCounter:  0,
+		terminalOffset:  0,
 	}
 }
 
@@ -171,7 +188,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouseEvent(msg)
 	}
 
-	// Handle text input updates when in input mode
+	// Handle text input updates when in input mode (not terminal, as terminal handles it separately)
 	if m.mode == ModeCommand || m.mode == ModeInput {
 		var cmd tea.Cmd
 		m.textInput, cmd = m.textInput.Update(msg)
@@ -189,6 +206,8 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleInputMode(msg)
 	case ModeHelp:
 		return m.handleHelpMode(msg)
+	case ModeTerminal:
+		return m.handleTerminalMode(msg)
 	case ModeNormal:
 		return m.handleNormalMode(msg)
 	}
@@ -201,6 +220,15 @@ func (m *Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
+
+	case msg.Type == tea.KeyEscape:
+		// Clear command output if visible (but only if not in terminal mode)
+		if m.commandOut != "" && m.mode != ModeTerminal {
+			m.commandOut = ""
+			m.errorMsg = ""
+			m.statusMsg = ""
+			return m, nil
+		}
 
 	case key.Matches(msg, m.keys.Help):
 		m.mode = ModeHelp
@@ -276,7 +304,20 @@ func (m *Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Command):
-		m.startInput(InputCommand, ":")
+		// Toggle between Navigation and Terminal modes
+		if m.mode == ModeTerminal {
+			// Switch back to Navigation mode
+			m.mode = ModeNormal
+			m.textInput.Blur()
+		} else {
+			// Switch to Terminal mode
+			m.mode = ModeTerminal
+			m.textInput.Placeholder = "" // No placeholder in terminal mode
+			m.textInput.SetValue("")
+			m.textInput.Focus()
+			// Reset scroll to bottom when entering terminal
+			m.terminalOffset = 0
+		}
 		return m, nil
 	}
 
@@ -287,6 +328,12 @@ func (m *Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEscape:
+		// If in terminal mode, just blur but stay in terminal
+		if m.mode == ModeCommand {
+			m.textInput.Blur()
+			m.mode = ModeNormal
+			return m, nil
+		}
 		m.cancelInput()
 		return m, nil
 
@@ -307,6 +354,59 @@ func (m *Model) handleHelpMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// handleTerminalMode processes keys in terminal mode
+func (m *Model) handleTerminalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Command):
+		// Toggle back to navigation mode
+		m.mode = ModeNormal
+		m.textInput.Blur()
+		return m, nil
+
+	case key.Matches(msg, m.keys.Up):
+		// Scroll up in terminal history
+		if m.terminalOffset < len(m.terminalHistory)*3 { // Rough estimate of lines per entry
+			m.terminalOffset++
+		}
+		return m, nil
+
+	case key.Matches(msg, m.keys.Down):
+		// Scroll down in terminal history
+		if m.terminalOffset > 0 {
+			m.terminalOffset--
+		}
+		return m, nil
+
+	case key.Matches(msg, m.keys.PageUp):
+		// Scroll up page in terminal history
+		m.terminalOffset += 10
+		return m, nil
+
+	case key.Matches(msg, m.keys.PageDown):
+		// Scroll down page in terminal history
+		m.terminalOffset -= 10
+		if m.terminalOffset < 0 {
+			m.terminalOffset = 0
+		}
+		return m, nil
+
+	case msg.Type == tea.KeyEnter:
+		// Execute command
+		return m, m.submitTerminalCommand()
+
+	case msg.Type == tea.KeyEscape:
+		// Return to navigation mode
+		m.mode = ModeNormal
+		m.textInput.Blur()
+		return m, nil
+	}
+
+	// Let text input handle all other keys (typing letters, backspace, etc.)
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(msg)
+	return m, cmd
 }
 
 // handleMouseEvent processes mouse input
@@ -400,6 +500,17 @@ func (m *Model) cancelInput() {
 // submitInput processes the collected input
 func (m *Model) submitInput() tea.Cmd {
 	value := strings.TrimSpace(m.textInput.Value())
+
+	// For command mode, keep terminal open and just clear input
+	if m.inputType == InputCommand {
+		m.textInput.SetValue("")
+		if value == "" {
+			return nil
+		}
+		return m.executeCommand(value)
+	}
+
+	// For other input types, close the input
 	m.cancelInput()
 
 	if value == "" {
@@ -418,8 +529,6 @@ func (m *Model) submitInput() tea.Cmd {
 			return m.deleteEntry()
 		}
 		return nil
-	case InputCommand:
-		return m.executeCommand(value)
 	}
 
 	return nil
@@ -455,6 +564,7 @@ func (m *Model) moveCursor(delta int) {
 func (m *Model) getVisibleLines() int {
 	// Reserve space for title, status bar, help, and padding
 	reserved := 8
+
 	available := m.height - reserved
 	if available < 5 {
 		return 5
@@ -631,6 +741,61 @@ func (m *Model) renameEntry(newName string) tea.Cmd {
 	}
 }
 
+// submitTerminalCommand executes a command in terminal mode
+func (m *Model) submitTerminalCommand() tea.Cmd {
+	cmdLine := strings.TrimSpace(m.textInput.Value())
+	m.textInput.SetValue("")
+
+	if cmdLine == "" {
+		return nil
+	}
+
+	// Create terminal entry with current path
+	entry := &TerminalEntry{
+		Number:  m.commandCounter,
+		Path:    m.currentPath,
+		Command: cmdLine,
+	}
+
+	// Add to history immediately (will be updated with output)
+	m.terminalHistory = append(m.terminalHistory, entry)
+	m.commandCounter++
+
+	return func() tea.Msg {
+		// Parse command line
+		args := parseCommandLine(cmdLine)
+		if len(args) == 0 {
+			return commandExecutedMsg{output: "", error: ""}
+		}
+
+		// Create a buffer to capture command output
+		var buf strings.Builder
+
+		exitCode, err := m.adapter.vfs.Execute(m.adapter.ctx, &buf, args...)
+
+		// Get the captured output
+		output := buf.String()
+		errStr := ""
+
+		if err != nil {
+			errStr = err.Error()
+		}
+
+		if exitCode != 0 && errStr == "" {
+			errStr = fmt.Sprintf("Command exited with code %d", exitCode)
+		}
+
+		// Update the entry with output
+		entry.Output = output
+		entry.Error = errStr
+
+		return commandExecutedMsg{
+			output: output,
+			error:  errStr,
+		}
+	}
+}
+
 func (m *Model) executeCommand(cmdLine string) tea.Cmd {
 	return func() tea.Msg {
 		// Parse command line
@@ -642,13 +807,19 @@ func (m *Model) executeCommand(cmdLine string) tea.Cmd {
 		output := ""
 		errStr := ""
 
-		exitCode, err := m.adapter.vfs.Execute(m.adapter.ctx, args...)
+		// Create a buffer to capture command output
+		var buf strings.Builder
+
+		exitCode, err := m.adapter.vfs.Execute(m.adapter.ctx, &buf, args...)
+
+		// Get the captured output
+		output = buf.String()
 
 		if err != nil {
 			errStr = err.Error()
 		}
 
-		if exitCode != 0 {
+		if exitCode != 0 && errStr == "" {
 			errStr = fmt.Sprintf("Command exited with code %d", exitCode)
 		}
 

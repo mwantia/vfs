@@ -104,8 +104,8 @@ func DefaultKeyMap() KeyMap {
 
 		// Command mode
 		Command: key.NewBinding(
-			key.WithKeys(":"),
-			key.WithHelp(":", "command"),
+			key.WithKeys("#"),
+			key.WithHelp("#", "toggle terminal"),
 		),
 
 		// Application
