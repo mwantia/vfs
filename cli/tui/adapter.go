@@ -12,12 +12,12 @@ import (
 
 // VFSAdapter wraps VirtualFileSystem operations for the TUI
 type VFSAdapter struct {
-	vfs *vfs.VirtualFileSystem
+	vfs vfs.VirtualFileSystem
 	ctx context.Context
 }
 
 // NewVFSAdapter creates a new adapter for VFS operations
-func NewVFSAdapter(ctx context.Context, fs *vfs.VirtualFileSystem) *VFSAdapter {
+func NewVFSAdapter(ctx context.Context, fs vfs.VirtualFileSystem) *VFSAdapter {
 	return &VFSAdapter{
 		vfs: fs,
 		ctx: ctx,
@@ -141,7 +141,7 @@ func (a *VFSAdapter) DeleteRecursive(path string) error {
 
 // Exists checks if a path exists
 func (a *VFSAdapter) Exists(path string) bool {
-	exists, _ := a.vfs.Lookup(a.ctx, path)
+	exists, _ := a.vfs.LookupMetadata(a.ctx, path)
 	return exists
 }
 

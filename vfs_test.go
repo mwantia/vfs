@@ -52,7 +52,7 @@ func TestAllBackends_FileOperations(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -119,7 +119,7 @@ func TestAllBackends_DirectoryOperations(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -177,7 +177,7 @@ func TestAllBackends_NestedPaths(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -239,7 +239,7 @@ func TestAllBackends_ErrorCases(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -287,7 +287,7 @@ func TestAllBackends_StatOperations(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -356,7 +356,7 @@ func TestAllBackends_MultipleFiles(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -410,7 +410,7 @@ func TestAllBackends_FileAppend(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -463,7 +463,7 @@ func TestAllBackends_FileTruncate(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -516,7 +516,7 @@ func TestAllBackends_EmptyDirectory(t *testing.T) {
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVfs()
+			fs, _ := vfs.NewVirtualFileSystem()
 
 			backend, err := factory(t)
 			if err != nil {
@@ -561,7 +561,7 @@ func TestAllBackends_EmptyDirectory(t *testing.T) {
 // TestVFS_CloseMethod verifies that the Close method properly unmounts all filesystems
 func TestVFS_CloseMethod(t *testing.T) {
 	ctx := t.Context()
-	fs, _ := vfs.NewVfs()
+	fs, _ := vfs.NewVirtualFileSystem()
 
 	// Mount multiple backends
 	if err := fs.Mount(ctx, "/", memory.NewMemoryBackend()); err != nil {
@@ -583,14 +583,14 @@ func TestVFS_CloseMethod(t *testing.T) {
 	}
 	f.Close()
 
-	// Close should unmount all filesystems
-	if err := fs.Close(ctx); err != nil {
-		t.Fatalf("Close failed: %v", err)
+	// Shutdown should unmount all filesystems
+	if err := fs.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
 	}
 
 	// After close, operations should fail because nothing is mounted
 	_, err = fs.StatMetadata(ctx, "/test.txt")
 	if err == nil {
-		t.Error("Expected error after Close, but operation succeeded")
+		t.Error("Expected error after Shutdown, but operation succeeded")
 	}
 }

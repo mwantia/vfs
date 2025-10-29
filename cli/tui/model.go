@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mwantia/vfs/command"
 )
 
 // Mode represents the current interaction mode
@@ -38,7 +37,6 @@ const (
 type Model struct {
 	// Core components
 	adapter *VFSAdapter
-	cmd     *command.CommandCenter
 	theme   *Theme
 	keys    KeyMap
 	help    help.Model
@@ -59,9 +57,9 @@ type Model struct {
 	previewGen     int // Generation counter to prevent race conditions
 
 	// Mouse state
-	lastClickTime int64  // Unix nano timestamp of last click
-	lastClickY    int    // Y position of last click
-	fileListTop   int    // Y position where file list starts (for click detection)
+	lastClickTime int64 // Unix nano timestamp of last click
+	lastClickY    int   // Y position of last click
+	fileListTop   int   // Y position where file list starts (for click detection)
 
 	// Mode state
 	mode      Mode
@@ -81,14 +79,14 @@ type Model struct {
 }
 
 // NewModel creates a new TUI model
-func NewModel(adapter *VFSAdapter, cmd *command.CommandCenter) *Model {
+func NewModel(adapter *VFSAdapter) *Model {
 	ti := textinput.New()
 	ti.Placeholder = "Enter command..."
 	ti.CharLimit = 256
 
 	return &Model{
-		adapter:      adapter,
-		cmd:          cmd,
+		adapter: adapter,
+		//cmd:          cmd,
 		theme:        DefaultTheme(),
 		keys:         DefaultKeyMap(),
 		help:         help.New(),
@@ -641,11 +639,10 @@ func (m *Model) executeCommand(cmdLine string) tea.Cmd {
 			return commandExecutedMsg{output: "", error: ""}
 		}
 
-		// Execute command through command center
-		exitCode, err := m.cmd.Execute(m.adapter.ctx, m.adapter.vfs, args...)
-
 		output := ""
 		errStr := ""
+
+		exitCode, err := m.adapter.vfs.Execute(m.adapter.ctx, args...)
 
 		if err != nil {
 			errStr = err.Error()
@@ -655,7 +652,10 @@ func (m *Model) executeCommand(cmdLine string) tea.Cmd {
 			errStr = fmt.Sprintf("Command exited with code %d", exitCode)
 		}
 
-		return commandExecutedMsg{output: output, error: errStr}
+		return commandExecutedMsg{
+			output: output,
+			error:  errStr,
+		}
 	}
 }
 

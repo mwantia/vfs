@@ -7,8 +7,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mwantia/vfs"
-	"github.com/mwantia/vfs/command"
-	"github.com/mwantia/vfs/command/builtin"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/log"
 	"github.com/mwantia/vfs/mount"
@@ -20,9 +18,9 @@ import (
 )
 
 // setupDemoVFS creates a demo filesystem with sample files and directories
-func setupDemoVFS(ctx context.Context) (*vfs.VirtualFileSystem, error) {
+func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 	// Create VFS instance
-	fs, err := vfs.NewVfs(vfs.WithLogLevel(log.Debug), vfs.WithLogFile("vfs.log"), vfs.WithoutTerminalLog())
+	fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug), vfs.WithLogFile("vfs.log"), vfs.WithoutTerminalLog())
 	if err != nil {
 		return nil, err
 	}
@@ -117,16 +115,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set up command center
-	cmd := command.NewCommandCenter()
-	if err := builtin.InitBuiltin(cmd); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to setup Command Center: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Create VFS adapter and TUI model
 	adapter := tui.NewVFSAdapter(ctx, fs)
-	model := tui.NewModel(adapter, cmd)
+	model := tui.NewModel(adapter)
 
 	// Start TUI
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -135,8 +126,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Clean up VFS mounts before exiting
-	if err := fs.Close(ctx); err != nil {
+	// Shutdown up VFS mounts before exiting
+	if err := fs.Shutdown(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to properly close VFS: %v\n", err)
 	}
 }
