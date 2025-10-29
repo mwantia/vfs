@@ -18,6 +18,9 @@ ARG USER_GID=$USER_UID
 USER $USERNAME
 WORKDIR /workspace
 
+# Add tmux config (or copy from repo)
+COPY tmux.conf /root/$USERNAME/.tmux.conf
+
 # Install protoc Go plugins
 RUN go install github.com/go-task/task/v3/cmd/task@latest || true && \
     go install github.com/Zxilly/go-size-analyzer/cmd/gsa@latest || true
