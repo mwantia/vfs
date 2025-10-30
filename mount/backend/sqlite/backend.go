@@ -68,7 +68,8 @@ func (sb *SQLiteBackend) initSchema() error {
 	-- Metadata storage
 	CREATE TABLE IF NOT EXISTS vfs_metadata (
 		id TEXT PRIMARY KEY,
-		key TEXT NOT NULL UNIQUE,
+		namespace TEXT NOT NULL DEFAULT '',
+		key TEXT NOT NULL,
 		mode INTEGER NOT NULL,
 		size INTEGER NOT NULL DEFAULT 0,
 		uid INTEGER,
@@ -78,9 +79,10 @@ func (sb *SQLiteBackend) initSchema() error {
 		create_time INTEGER NOT NULL,
 		content_type TEXT,
 		etag TEXT,
-		attributes TEXT
+		attributes TEXT,
+		UNIQUE(namespace, key)
 	);
-	CREATE INDEX IF NOT EXISTS idx_vfs_metadata_key ON vfs_metadata(key);
+	CREATE INDEX IF NOT EXISTS idx_vfs_metadata_namespace_key ON vfs_metadata(namespace, key);
 
 	-- Content storage with reference counting
 	CREATE TABLE IF NOT EXISTS vfs_data (
@@ -113,19 +115,20 @@ func (sb *SQLiteBackend) Open(ctx context.Context) error {
 		return err
 	}
 
-	// Load all keys into memory B-tree
-	rows, err := sb.db.QueryContext(ctx, "SELECT key, id FROM vfs_metadata")
+	// Load all keys into memory B-tree (with namespace prefixing)
+	rows, err := sb.db.QueryContext(ctx, "SELECT namespace, key, id FROM vfs_metadata")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var key, id string
-		if err := rows.Scan(&key, &id); err != nil {
+		var namespace, key, id string
+		if err := rows.Scan(&namespace, &key, &id); err != nil {
 			return err
 		}
-		sb.keys.Set(key, id)
+		nsKey := backend.NamespacedKey(namespace, key)
+		sb.keys.Set(nsKey, id)
 	}
 
 	return rows.Err()

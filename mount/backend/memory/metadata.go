@@ -11,7 +11,7 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 )
 
-func (mb *MemoryBackend) CreateMeta(ctx context.Context, meta *data.Metadata) error {
+func (mb *MemoryBackend) CreateMeta(ctx context.Context, namespace string, meta *data.Metadata) error {
 	// Populate unique ID if not already defined
 	if meta.ID == "" {
 		meta.ID = uuid.Must(uuid.NewV7()).String()
@@ -22,7 +22,8 @@ func (mb *MemoryBackend) CreateMeta(ctx context.Context, meta *data.Metadata) er
 		meta.CreateTime = time.Now()
 	}
 
-	mb.keys.Set(meta.Key, meta.ID)
+	nsKey := backend.NamespacedKey(namespace, meta.Key)
+	mb.keys.Set(nsKey, meta.ID)
 	mb.metadata[meta.ID] = meta
 
 	// Update directory index for fast lookups
@@ -30,18 +31,20 @@ func (mb *MemoryBackend) CreateMeta(ctx context.Context, meta *data.Metadata) er
 	if idx := strings.LastIndex(meta.Key, "/"); idx >= 0 {
 		// Parent directory path (everything before last /)
 		parentDir := meta.Key[:idx+1]
+		nsParentDir := backend.NamespacedKey(namespace, parentDir)
 		// Add this key to parent's children list
-		if mb.directories[parentDir] == nil {
-			mb.directories[parentDir] = make([]string, 0)
+		if mb.directories[nsParentDir] == nil {
+			mb.directories[nsParentDir] = make([]string, 0)
 		}
-		mb.directories[parentDir] = append(mb.directories[parentDir], meta.Key)
+		mb.directories[nsParentDir] = append(mb.directories[nsParentDir], nsKey)
 	}
 
 	return nil
 }
 
-func (mb *MemoryBackend) ReadMeta(ctx context.Context, key string) (*data.Metadata, error) {
-	id, exists := mb.keys.Get(key)
+func (mb *MemoryBackend) ReadMeta(ctx context.Context, namespace string, key string) (*data.Metadata, error) {
+	nsKey := backend.NamespacedKey(namespace, key)
+	id, exists := mb.keys.Get(nsKey)
 	if !exists {
 		return nil, data.ErrNotExist
 	}
@@ -56,8 +59,9 @@ func (mb *MemoryBackend) ReadMeta(ctx context.Context, key string) (*data.Metada
 	return meta, nil
 }
 
-func (mb *MemoryBackend) UpdateMeta(ctx context.Context, key string, update *data.MetadataUpdate) error {
-	id, exists := mb.keys.Get(key)
+func (mb *MemoryBackend) UpdateMeta(ctx context.Context, namespace string, key string, update *data.MetadataUpdate) error {
+	nsKey := backend.NamespacedKey(namespace, key)
+	id, exists := mb.keys.Get(nsKey)
 	if !exists {
 		return data.ErrNotExist
 	}
@@ -76,13 +80,14 @@ func (mb *MemoryBackend) UpdateMeta(ctx context.Context, key string, update *dat
 	return nil
 }
 
-func (mb *MemoryBackend) DeleteMeta(ctx context.Context, key string) error {
-	id, exists := mb.keys.Get(key)
+func (mb *MemoryBackend) DeleteMeta(ctx context.Context, namespace string, key string) error {
+	nsKey := backend.NamespacedKey(namespace, key)
+	id, exists := mb.keys.Get(nsKey)
 	if !exists {
 		return data.ErrNotExist
 	}
 
-	if _, ok := mb.keys.Delete(key); ok {
+	if _, ok := mb.keys.Delete(nsKey); ok {
 		hardLinks := false
 		mb.keys.Scan(func(key, value string) bool {
 			if value == id {
@@ -100,18 +105,19 @@ func (mb *MemoryBackend) DeleteMeta(ctx context.Context, key string) error {
 		// Update directory index - remove this key from parent's children
 		if idx := strings.LastIndex(key, "/"); idx >= 0 {
 			parentDir := key[:idx+1]
-			if children, ok := mb.directories[parentDir]; ok {
+			nsParentDir := backend.NamespacedKey(namespace, parentDir)
+			if children, ok := mb.directories[nsParentDir]; ok {
 				// Find and remove this key from children list
 				for i, child := range children {
-					if child == key {
+					if child == nsKey {
 						// Remove by swapping with last element and truncating
-						mb.directories[parentDir] = append(children[:i], children[i+1:]...)
+						mb.directories[nsParentDir] = append(children[:i], children[i+1:]...)
 						break
 					}
 				}
 				// Clean up empty directory entries
-				if len(mb.directories[parentDir]) == 0 {
-					delete(mb.directories, parentDir)
+				if len(mb.directories[nsParentDir]) == 0 {
+					delete(mb.directories, nsParentDir)
 				}
 			}
 		}
@@ -120,8 +126,9 @@ func (mb *MemoryBackend) DeleteMeta(ctx context.Context, key string) error {
 	return nil
 }
 
-func (mb *MemoryBackend) ExistsMeta(ctx context.Context, key string) (bool, error) {
-	id, exists := mb.keys.Get(key)
+func (mb *MemoryBackend) ExistsMeta(ctx context.Context, namespace string, key string) (bool, error) {
+	nsKey := backend.NamespacedKey(namespace, key)
+	id, exists := mb.keys.Get(nsKey)
 	if !exists {
 		return false, data.ErrNotExist
 	}
@@ -134,34 +141,57 @@ func (mb *MemoryBackend) ExistsMeta(ctx context.Context, key string) (bool, erro
 	return true, nil
 }
 
-func (mb *MemoryBackend) QueryMeta(ctx context.Context, query *backend.MetadataQuery) (*backend.MetadataQueryResult, error) {
+func (mb *MemoryBackend) QueryMeta(ctx context.Context, namespace string, query *backend.MetadataQuery) (*backend.MetadataQueryResult, error) {
 	var candidates []*data.Metadata
 
 	if query.Delimiter == "/" {
 		// Delimiter mode: return only direct children
 		if query.Prefix != "" {
 			// Non-empty prefix: use pre-computed directory index
-			if children, ok := mb.directories[query.Prefix]; ok {
-				for _, key := range children {
-					id, _ := mb.keys.Get(key)
+			nsPrefix := backend.NamespacedKey(namespace, query.Prefix)
+			if children, ok := mb.directories[nsPrefix]; ok {
+				for _, nsKey := range children {
+					id, _ := mb.keys.Get(nsKey)
 					candidates = append(candidates, mb.metadata[id])
 				}
 			}
 		} else {
 			// Empty prefix (root): return only top-level entries (no "/" in key)
-			for _, meta := range mb.metadata {
-				if !strings.Contains(meta.Key, "/") {
-					candidates = append(candidates, meta)
+			// Need to filter by namespace
+			nsPrefix := backend.NamespacedKey(namespace, "")
+			mb.keys.Scan(func(nsKey string, id string) bool {
+				// Check if this key belongs to our namespace
+				if namespace != "" && !strings.HasPrefix(nsKey, nsPrefix) {
+					return true
 				}
-			}
+				// Extract the actual key (remove namespace prefix)
+				key := nsKey
+				if namespace != "" {
+					key = strings.TrimPrefix(nsKey, namespace+":")
+				}
+				// Only include top-level entries
+				if !strings.Contains(key, "/") {
+					candidates = append(candidates, mb.metadata[id])
+				}
+				return true
+			})
 		}
 	} else {
 		// No delimiter: return all entries matching prefix (recursive)
-		for _, meta := range mb.metadata {
-			if query.Prefix == "" || strings.HasPrefix(meta.Key, query.Prefix) {
-				candidates = append(candidates, meta)
+		nsPrefix := backend.NamespacedKey(namespace, query.Prefix)
+		mb.keys.Scan(func(nsKey string, id string) bool {
+			// Check if this key belongs to our namespace and matches prefix
+			if namespace != "" {
+				if !strings.HasPrefix(nsKey, namespace+":") {
+					return true
+				}
 			}
-		}
+			if query.Prefix != "" && !strings.HasPrefix(nsKey, nsPrefix) {
+				return true
+			}
+			candidates = append(candidates, mb.metadata[id])
+			return true
+		})
 	}
 
 	// Apply query filters

@@ -29,7 +29,7 @@ func (vfs *virtualFileSystemImpl) Mount(ctx context.Context, path string, primar
 	}
 	// Check if parent mount denies nesting BEFORE acquiring write lock
 	if parent, err := vfs.getMountFromPath(absolute); err == nil {
-		if !parent.Options.Nesting {
+		if !parent.Options.AllowNesting {
 			vfs.log.Error("Mount: parent mount at %s denies nesting", parent.Path)
 			return errors.PathMountNestingDenied(nil, parent.Path)
 		}
@@ -53,7 +53,7 @@ func (vfs *virtualFileSystemImpl) Mount(ctx context.Context, path string, primar
 		return errors.PathAlreadyMounted(nil, absolute)
 	}
 
-	vfs.log.Debug("Mount: initializing mount at %s (readonly=%v dual=%v)", absolute, mnt.Options.ReadOnly, mnt.IsDualMount)
+	vfs.log.Debug("Mount: initializing mount at %s (readonly=%v dual=%v)", absolute, mnt.Options.IsReadOnly, mnt.IsDualMount)
 	if err := mnt.Mount(ctx); err != nil {
 		vfs.log.Error("Mount: failed to mount %s backend at %s - %v", primary.Name(), absolute, err)
 		return data.ErrMountFailed
@@ -99,6 +99,21 @@ func (vfs *virtualFileSystemImpl) Unmount(ctx context.Context, path string, forc
 	delete(vfs.mnts, absolute)
 	vfs.log.Info("Unmount: successfully unmounted %s", absolute)
 	return nil
+}
+
+func (vfs *virtualFileSystemImpl) getPrefixRelativePath(mnt *mount.Mount, absolute string) string {
+	relative := data.ToRelativePath(absolute, mnt.Path)
+	// Update relative path if mount has been set with a path-prefix
+	if mnt.Options.PathPrefix != "" {
+		prefix := mnt.Options.PathPrefix
+		if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+
+		relative = prefix + relative
+	}
+
+	return relative
 }
 
 func (vfs *virtualFileSystemImpl) getMountFromPath(path string) (*mount.Mount, error) {

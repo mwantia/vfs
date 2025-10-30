@@ -10,26 +10,23 @@ import (
 
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/data/errors"
+	"github.com/mwantia/vfs/mount/backend"
 )
 
-// Namespace returns the identifier used as namespace
-func (_ *SQLiteBackend) Namespace() string {
-	return ""
-}
-
-func (sb *SQLiteBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
+func (sb *SQLiteBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
 	// Check if path exists in B-tree
-	if _, exists := sb.keys.Get(key); exists {
+	nsKey := backend.NamespacedKey(namespace, key)
+	if _, exists := sb.keys.Get(nsKey); exists {
 		return nil, data.ErrExist
 	}
 
 	// Verify parent directory exists
 	parentKey := path.Dir(key)
 	if parentKey != "." && parentKey != "" {
-		parentMeta, err := sb.ReadMeta(ctx, parentKey)
+		parentMeta, err := sb.ReadMeta(ctx, namespace, parentKey)
 		if err != nil {
 			return nil, data.ErrNotExist
 		}
@@ -42,14 +39,14 @@ func (sb *SQLiteBackend) CreateObject(ctx context.Context, key string, mode data
 	meta := data.NewFileMetadata(key, 0, mode)
 	stat := meta.ToStat()
 
-	return stat, sb.CreateMeta(ctx, meta)
+	return stat, sb.CreateMeta(ctx, namespace, meta)
 }
 
-func (sb *SQLiteBackend) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (sb *SQLiteBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
-	meta, err := sb.ReadMeta(ctx, key)
+	meta, err := sb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return 0, err
 	}
@@ -85,11 +82,11 @@ func (sb *SQLiteBackend) ReadObject(ctx context.Context, key string, offset int6
 	return n, nil
 }
 
-func (sb *SQLiteBackend) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (sb *SQLiteBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
-	meta, err := sb.ReadMeta(ctx, key)
+	meta, err := sb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return 0, err
 	}
@@ -174,11 +171,11 @@ func (sb *SQLiteBackend) WriteObject(ctx context.Context, key string, offset int
 	return len(dat), nil
 }
 
-func (sb *SQLiteBackend) DeleteObject(ctx context.Context, key string, force bool) error {
+func (sb *SQLiteBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
-	meta, err := sb.ReadMeta(ctx, key)
+	meta, err := sb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return err
 	}
@@ -189,9 +186,9 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, key string, force boo
 			return data.ErrIsDirectory
 		}
 
-		// Build prefix for children lookup
-		prefixKey := key
-		if prefixKey != "" {
+		// Build prefix for children lookup (using namespaced keys)
+		prefixKey := backend.NamespacedKey(namespace, key)
+		if key != "" {
 			prefixKey += "/"
 		}
 
@@ -200,9 +197,11 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, key string, force boo
 		keysToDelete = append(keysToDelete, key)
 
 		// Use B-tree range scan to find all children
-		sb.keys.Scan(func(childPath string, _ string) bool {
-			if strings.HasPrefix(childPath, prefixKey) {
-				keysToDelete = append(keysToDelete, childPath)
+		sb.keys.Scan(func(nsChildPath string, _ string) bool {
+			if strings.HasPrefix(nsChildPath, prefixKey) {
+				// Strip namespace prefix to get the actual key
+				childKey := strings.TrimPrefix(nsChildPath, namespace+":")
+				keysToDelete = append(keysToDelete, childKey)
 			}
 			// Continue scanning
 			return true
@@ -212,7 +211,7 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, key string, force boo
 
 		// Delete all collected paths
 		for _, delKey := range keysToDelete {
-			if err := sb.DeleteMeta(ctx, delKey); err != nil {
+			if err := sb.DeleteMeta(ctx, namespace, delKey); err != nil {
 				errs.Add(err)
 			}
 		}
@@ -220,16 +219,16 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, key string, force boo
 		return errs.Errors()
 	}
 
-	return sb.DeleteMeta(ctx, key)
+	return sb.DeleteMeta(ctx, namespace, key)
 }
 
-func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
+func (sb *SQLiteBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
 	// For root directory, skip the existence check - root is implicit
 	if key != "" {
-		meta, err := sb.ReadMeta(ctx, key)
+		meta, err := sb.ReadMeta(ctx, namespace, key)
 		if err != nil {
 			return nil, err
 		}
@@ -242,35 +241,33 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.F
 		}
 	}
 
-	// For directories, use B-tree range scan to find children
-	prefixKey := key
-	if prefixKey != "" {
-		prefixKey += "/"
+	// For directories, use B-tree range scan to find children (using namespaced keys)
+	nsPrefixKey := backend.NamespacedKey(namespace, key)
+	if key != "" {
+		nsPrefixKey += "/"
 	}
-	prefixLen := len(prefixKey)
+	nsPrefixLen := len(nsPrefixKey)
 
 	// Use map to deduplicate direct children
 	children := make(map[string]*data.Metadata)
 
 	// B-tree range scan: iterate over all paths starting with prefix
-	sb.keys.Scan(func(childPath string, childID string) bool {
-		// Skip the directory itself
-		if childPath == key {
-			return true
-		}
-
-		// Check if this path is under our directory
-		if !strings.HasPrefix(childPath, prefixKey) {
+	sb.keys.Scan(func(nsChildPath string, childID string) bool {
+		// Check if this path is under our namespace and directory
+		if !strings.HasPrefix(nsChildPath, nsPrefixKey) {
 			return true // Continue scanning (paths are ordered)
 		}
 
-		// Get relative path
-		rel := childPath[prefixLen:]
+		// Get relative path (without namespace prefix)
+		rel := nsChildPath[nsPrefixLen:]
 
 		// Skip empty relative paths (shouldn't happen but be safe)
 		if rel == "" {
 			return true
 		}
+
+		// Strip namespace to get the actual child key
+		childKey := strings.TrimPrefix(nsChildPath, namespace+":")
 
 		// Check if this is a direct child (no slash in relative path)
 		if slashIdx := strings.IndexByte(rel, '/'); slashIdx > 0 {
@@ -278,14 +275,18 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.F
 			childName := rel[:slashIdx]
 			if _, seen := children[childName]; !seen {
 				// Look up the directory metadata
-				dirPath := prefixKey + childName
-				dirMeta, err := sb.ReadMeta(ctx, dirPath)
+				dirKey := key
+				if dirKey != "" {
+					dirKey += "/"
+				}
+				dirKey += childName
+				dirMeta, err := sb.ReadMeta(ctx, namespace, dirKey)
 				if err == nil {
 					children[childName] = dirMeta
 				}
 			}
 		} else {
-			childMeta, err := sb.ReadMeta(ctx, childPath)
+			childMeta, err := sb.ReadMeta(ctx, namespace, childKey)
 			if err == nil {
 				children[rel] = childMeta
 			}
@@ -305,11 +306,11 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.F
 	return result, nil
 }
 
-func (sb *SQLiteBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
+func (sb *SQLiteBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
-	meta, err := sb.ReadMeta(ctx, key)
+	meta, err := sb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return nil, err
 	}
@@ -317,11 +318,11 @@ func (sb *SQLiteBackend) HeadObject(ctx context.Context, key string) (*data.File
 	return meta.ToStat(), nil
 }
 
-func (sb *SQLiteBackend) TruncateObject(ctx context.Context, key string, size int64) error {
+func (sb *SQLiteBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
-	meta, err := sb.ReadMeta(ctx, key)
+	meta, err := sb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return err
 	}

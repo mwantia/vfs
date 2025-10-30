@@ -14,7 +14,6 @@ import (
 	"github.com/mwantia/vfs/mount/extension/cache"
 	"github.com/mwantia/vfs/mount/extension/encrypt"
 	"github.com/mwantia/vfs/mount/extension/multipart"
-	"github.com/mwantia/vfs/mount/extension/namespace"
 	"github.com/mwantia/vfs/mount/extension/rubbish"
 	"github.com/mwantia/vfs/mount/extension/snapshot"
 	"github.com/mwantia/vfs/mount/extension/versioning"
@@ -38,7 +37,6 @@ type Mount struct {
 	Cache      cache.CacheBackendExtension
 	Encrypt    encrypt.EncryptBackendExtension
 	Multipart  multipart.MultipartBackendExtension
-	Namespace  namespace.NamespaceBackendExtension
 	Rubbish    rubbish.RubbishBackendExtension
 	Snapshot   snapshot.SnapshotBackendExtension
 	Versioning versioning.VersioningBackendExtension
@@ -72,7 +70,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 			return nil, fmt.Errorf("failed to parse extension '%s' for ACL backend", ext.Name())
 		}
 		mnt.ACL = acl
-	} else if options.Auto && caps.Contains(backend.CapabilityACL) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilityACL) {
 		acl, ok := primary.(acl.AclBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for ACL backend", ext.Name())
@@ -87,7 +85,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 			return nil, fmt.Errorf("failed to parse extension '%s' for Cache backend", ext.Name())
 		}
 		mnt.Cache = cache
-	} else if options.Auto && caps.Contains(backend.CapabilityCache) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilityCache) {
 		cache, ok := primary.(cache.CacheBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Cache backend", ext.Name())
@@ -102,7 +100,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 			return nil, fmt.Errorf("failed to parse extension '%s' for Encrypt backend", ext.Name())
 		}
 		mnt.Encrypt = encrypt
-	} else if options.Auto && caps.Contains(backend.CapabilityEncrypt) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilityEncrypt) {
 		encrypt, ok := primary.(encrypt.EncryptBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Encrypt backend", ext.Name())
@@ -117,7 +115,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 			return nil, fmt.Errorf("failed to parse extension '%s' for Metadata backend", ext.Name())
 		}
 		mnt.Metadata = metadata
-	} else if options.Auto && caps.Contains(backend.CapabilityMetadata) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilityMetadata) {
 		metadata, ok := primary.(backend.MetadataBackend)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Metadata backend", primary.Name())
@@ -134,7 +132,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 			return nil, fmt.Errorf("failed to parse extension '%s' for Multipart backend", ext.Name())
 		}
 		mnt.Multipart = multipart
-	} else if options.Auto && caps.Contains(backend.CapabilityMultipart) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilityMultipart) {
 		multipart, ok := primary.(multipart.MultipartBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Multipart backend", ext.Name())
@@ -142,20 +140,20 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 		mnt.Multipart = multipart
 	}
 	// Perform capability check for extension Namespace
-	if ext, exists := options.Backends[backend.CapabilityNamespace]; exists {
+	/* if ext, exists := options.Backends[backend.CapabilityNamespace]; exists {
 		// Type validation for interface
 		namespace, ok := ext.(namespace.NamespaceBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for namespace backend", ext.Name())
 		}
 		mnt.Namespace = namespace
-	} else if options.Auto && caps.Contains(backend.CapabilityNamespace) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilityNamespace) {
 		namespace, ok := primary.(namespace.NamespaceBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for namespace backend", ext.Name())
 		}
 		mnt.Namespace = namespace
-	}
+	} */
 	// Perform capability check for extension Rubbish
 	if ext, exists := options.Backends[backend.CapabilityRubbish]; exists {
 		// Type validation for interface
@@ -164,7 +162,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 			return nil, fmt.Errorf("failed to parse extension '%s' for Rubbish backend", ext.Name())
 		}
 		mnt.Rubbish = rubbish
-	} else if options.Auto && caps.Contains(backend.CapabilityRubbish) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilityRubbish) {
 		rubbish, ok := primary.(rubbish.RubbishBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Rubbish backend", ext.Name())
@@ -179,7 +177,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 			return nil, fmt.Errorf("failed to parse extension '%s' for Snapshot backend", ext.Name())
 		}
 		mnt.Snapshot = snapshot
-	} else if options.Auto && caps.Contains(backend.CapabilitySnapshot) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilitySnapshot) {
 		snapshot, ok := primary.(snapshot.SnapshotBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Snapshot backend", ext.Name())
@@ -194,7 +192,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBac
 			return nil, fmt.Errorf("failed to parse extension '%s' for Versioning backend", ext.Name())
 		}
 		mnt.Versioning = versioning
-	} else if options.Auto && caps.Contains(backend.CapabilityVersioning) {
+	} else if options.AutoExtensions && caps.Contains(backend.CapabilityVersioning) {
 		versioning, ok := primary.(versioning.VersioningBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Versioning backend", ext.Name())
@@ -366,7 +364,7 @@ func (m *Mount) getUniqueBackends() []backend.Backend {
 		m.Cache,
 		m.Encrypt,
 		m.Metadata,
-		m.Namespace,
+		// m.Namespace,
 		m.Multipart,
 		m.Rubbish,
 		m.Snapshot,

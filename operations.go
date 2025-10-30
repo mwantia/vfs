@@ -32,8 +32,10 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 		return nil, err
 	}
 
-	vfs.log.Debug("OpenFile: resolved to mount at %s", mnt.Path)
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	namespace := mnt.Options.Namespace
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
+
+	vfs.log.Debug("OpenFile: resolved to mount at '%s' with namespace '%s'", mnt.Path, namespace)
 	// Check if any previous streamer exists
 	streamer, exists := mnt.GetStreamer(relative)
 	if exists {
@@ -41,7 +43,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 		return streamer, nil
 	}
 	// Fail if we expect to create or write a stream on a readonly mount
-	if mnt.Options.ReadOnly {
+	if mnt.Options.IsReadOnly {
 		if flags&data.AccessModeWrite != 0 || flags&data.AccessModeCreate != 0 || flags&data.AccessModeExcl != 0 {
 			vfs.log.Error("OpenFile: cannot write to read-only mount at %s", mnt.Path)
 			return nil, data.ErrReadOnly
@@ -53,7 +55,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 	if mnt.Metadata != nil {
 		vfs.log.Debug("OpenFile: using metadata backend for %s", absolute)
 		// Try to read info from metadata
-		meta, err := mnt.Metadata.ReadMeta(ctx, relative)
+		meta, err := mnt.Metadata.ReadMeta(ctx, namespace, relative)
 		if err != nil {
 			// Fail if any error except NotExists
 			if err != data.ErrNotExist {
@@ -62,7 +64,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 			}
 			vfs.log.Debug("OpenFile: metadata not found for %s, falling back to object storage", absolute)
 			// Fallback to storage to read object stats
-			stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
+			stat, err := mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 			if err != nil {
 				// Fail if any error except NotExists
 				if err != data.ErrNotExist {
@@ -75,7 +77,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 					return nil, err
 				}
 				vfs.log.Info("OpenFile: creating new file %s in object storage", absolute)
-				stat, err = mnt.ObjectStorage.CreateObject(ctx, relative, 0x777)
+				stat, err = mnt.ObjectStorage.CreateObject(ctx, namespace, relative, 0x777)
 				if err != nil {
 					vfs.log.Error("OpenFile: failed to create object in storage for %s - %v", absolute, err)
 					return nil, err
@@ -86,7 +88,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 			if !mnt.IsDualMount && mnt.Metadata != nil {
 				vfs.log.Debug("OpenFile: syncing object stat to metadata for %s", absolute)
 				// Write stat back into metadata
-				if err := mnt.Metadata.CreateMeta(ctx, meta); err != nil {
+				if err := mnt.Metadata.CreateMeta(ctx, namespace, meta); err != nil {
 					vfs.log.Error("OpenFile: failed to sync metadata for %s - %v", absolute, err)
 					return nil, err
 				}
@@ -112,7 +114,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 	} else {
 		vfs.log.Debug("OpenFile: using object storage directly (no metadata backend) for %s", absolute)
 		// Fallback to storage to read object stats
-		stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
+		stat, err := mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 		if err != nil {
 			// Fail if any error except NotExists
 			if err != data.ErrNotExist {
@@ -125,7 +127,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 				return nil, err
 			}
 			vfs.log.Info("OpenFile: creating new file %s in object storage", absolute)
-			stat, err = mnt.ObjectStorage.CreateObject(ctx, relative, 0x777)
+			stat, err = mnt.ObjectStorage.CreateObject(ctx, namespace, relative, 0x777)
 			if err != nil {
 				vfs.log.Error("OpenFile: failed to create object in storage for %s - %v", absolute, err)
 				return nil, err
@@ -150,7 +152,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 	// Only truncate if TRUNC flag is set and we have write access
 	if flags.HasTrunc() && (flags.IsWriteOnly() || flags.IsReadWrite()) {
 		vfs.log.Debug("OpenFile: truncating file %s", absolute)
-		if err := mnt.ObjectStorage.TruncateObject(ctx, relative, 0); err != nil {
+		if err := mnt.ObjectStorage.TruncateObject(ctx, namespace, relative, 0); err != nil {
 			vfs.log.Error("OpenFile: failed to truncate file %s - %v", absolute, err)
 			return nil, err
 		}
@@ -178,7 +180,8 @@ func (vfs *virtualFileSystemImpl) CloseFile(ctx context.Context, path string, fo
 		return err
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
+
 	if err := mnt.CloseStreamer(ctx, relative, force); err != nil {
 		vfs.log.Error("CloseFile: failed to close streamer for %s - %v", absolute, err)
 		return err
@@ -211,11 +214,12 @@ func (vfs *virtualFileSystemImpl) ReadFile(ctx context.Context, path string, off
 		return nil, err
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	namespace := mnt.Options.Namespace
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
 	// If metadata exists, validate if size and offset matches
 	if mnt.Metadata != nil {
 		vfs.log.Debug("ReadFile: validating size using metadata for %s", absolute)
-		meta, err := mnt.Metadata.ReadMeta(ctx, relative)
+		meta, err := mnt.Metadata.ReadMeta(ctx, namespace, relative)
 		if err != nil {
 			// Fail if any error except NotExists
 			if err != data.ErrNotExist {
@@ -224,7 +228,7 @@ func (vfs *virtualFileSystemImpl) ReadFile(ctx context.Context, path string, off
 			}
 			vfs.log.Debug("ReadFile: metadata not found, falling back to object storage for %s", absolute)
 			// Fallback to storage to read object stats
-			stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
+			stat, err := mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 			if err != nil {
 				vfs.log.Error("ReadFile: object storage HeadObject failed for %s - %v", absolute, err)
 				return nil, err
@@ -234,7 +238,7 @@ func (vfs *virtualFileSystemImpl) ReadFile(ctx context.Context, path string, off
 			if !mnt.IsDualMount && mnt.Metadata != nil {
 				vfs.log.Debug("ReadFile: syncing object stat to metadata for %s", absolute)
 				// Write stat back into metadata
-				if err := mnt.Metadata.CreateMeta(ctx, meta); err != nil {
+				if err := mnt.Metadata.CreateMeta(ctx, namespace, meta); err != nil {
 					vfs.log.Warn("ReadFile: failed to sync metadata for %s - %v", absolute, err)
 					return nil, err
 				}
@@ -253,7 +257,7 @@ func (vfs *virtualFileSystemImpl) ReadFile(ctx context.Context, path string, off
 	} else {
 		vfs.log.Debug("ReadFile: validating size using object storage for %s", absolute)
 		// Fallback to storage to read object stats
-		stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
+		stat, err := mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 		if err != nil {
 			vfs.log.Error("ReadFile: object storage HeadObject failed for %s - %v", absolute, err)
 			return nil, err
@@ -272,7 +276,7 @@ func (vfs *virtualFileSystemImpl) ReadFile(ctx context.Context, path string, off
 
 	vfs.log.Debug("ReadFile: reading from object storage for %s", absolute)
 	buffer := make([]byte, size)
-	n, err := mnt.ObjectStorage.ReadObject(ctx, relative, offset, buffer)
+	n, err := mnt.ObjectStorage.ReadObject(ctx, namespace, relative, offset, buffer)
 	if err != nil && err != io.EOF {
 		vfs.log.Error("ReadFile: object storage ReadObject failed for %s - %v", absolute, err)
 		return nil, err
@@ -320,18 +324,19 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 		return 0, err
 	}
 	// Fail if mount is readonly
-	if mnt.Options.ReadOnly {
+	if mnt.Options.IsReadOnly {
 		vfs.log.Error("WriteFile: cannot write to read-only mount at %s", mnt.Path)
 		return 0, data.ErrReadOnly
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	namespace := mnt.Options.Namespace
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
 
 	var currentSize int64
 	// Read metadata info if available
 	if mnt.Metadata != nil {
 		vfs.log.Debug("WriteFile: validating file using metadata for %s", absolute)
-		meta, err := mnt.Metadata.ReadMeta(ctx, relative)
+		meta, err := mnt.Metadata.ReadMeta(ctx, namespace, relative)
 		if err != nil {
 			// Fail if any error except NotExists
 			if err != data.ErrNotExist {
@@ -340,7 +345,7 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 			}
 			vfs.log.Debug("WriteFile: metadata not found, falling back to object storage for %s", absolute)
 			// Fallback to storage to read object stats
-			stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
+			stat, err := mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 			if err != nil {
 				vfs.log.Error("WriteFile: object storage HeadObject failed for %s - %v", absolute, err)
 				return 0, err
@@ -350,7 +355,7 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 			if !mnt.IsDualMount && mnt.Metadata != nil {
 				vfs.log.Debug("WriteFile: syncing object stat to metadata for %s", absolute)
 				// Write stat back into metadata
-				if err := mnt.Metadata.CreateMeta(ctx, meta); err != nil {
+				if err := mnt.Metadata.CreateMeta(ctx, namespace, meta); err != nil {
 					vfs.log.Error("WriteFile: failed to sync metadata for %s - %v", absolute, err)
 					return 0, err
 				}
@@ -365,7 +370,7 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 	} else {
 		vfs.log.Debug("WriteFile: validating file using object storage for %s", absolute)
 		// Fallback to storage to read object stats
-		stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
+		stat, err := mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 		if err != nil {
 			vfs.log.Error("WriteFile: object storage HeadObject failed for %s - %v", absolute, err)
 			return 0, err
@@ -393,7 +398,7 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 	}
 
 	vfs.log.Debug("WriteFile: writing to object storage for %s", absolute)
-	n, err := mnt.ObjectStorage.WriteObject(ctx, relative, offset, buffer)
+	n, err := mnt.ObjectStorage.WriteObject(ctx, namespace, relative, offset, buffer)
 	if err != nil {
 		vfs.log.Error("WriteFile: object storage WriteObject failed for %s - %v", absolute, err)
 		return 0, err
@@ -408,7 +413,7 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 				Size: offset + int64(n),
 			},
 		}
-		if err := mnt.Metadata.UpdateMeta(ctx, relative, update); err != nil {
+		if err := mnt.Metadata.UpdateMeta(ctx, namespace, relative, update); err != nil {
 			vfs.log.Warn("WriteFile: failed to update metadata for %s - %v", absolute, err)
 			return n, err
 		}
@@ -465,12 +470,13 @@ func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string)
 		return nil, err
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	namespace := mnt.Options.Namespace
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
 	// We need to determine if the file exists
 	if mnt.Metadata != nil {
 		vfs.log.Debug("StatMetadata: querying metadata backend for %s", absolute)
 		// Try to read info from metadata
-		meta, err := mnt.Metadata.ReadMeta(ctx, relative)
+		meta, err := mnt.Metadata.ReadMeta(ctx, namespace, relative)
 		if err != nil {
 			// Fail if any error except NotExists
 			if err != data.ErrNotExist {
@@ -487,7 +493,7 @@ func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string)
 	}
 	// Fallback to storage to read object stats
 	vfs.log.Debug("StatMetadata: querying object storage backend for %s", absolute)
-	stat, err := mnt.ObjectStorage.HeadObject(ctx, relative)
+	stat, err := mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 	if err != nil {
 		vfs.log.Error("StatMetadata: object storage HeadObject failed for %s - %v", absolute, err)
 		return nil, err
@@ -498,7 +504,7 @@ func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string)
 	if !mnt.IsDualMount && mnt.Metadata != nil {
 		vfs.log.Debug("StatMetadata: syncing object stat to metadata for %s", absolute)
 		// Write stat back into metadata
-		if err := mnt.Metadata.CreateMeta(ctx, meta); err != nil {
+		if err := mnt.Metadata.CreateMeta(ctx, namespace, meta); err != nil {
 			vfs.log.Warn("StatMetadata: failed to sync metadata for %s - %v", absolute, err)
 			return nil, err
 		}
@@ -536,8 +542,8 @@ func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string
 		return nil, err
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
-
+	namespace := mnt.Options.Namespace
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
 	// Use a map to track entries by key to avoid duplicates
 	metaMap := make(map[string]*data.Metadata)
 
@@ -558,7 +564,7 @@ func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string
 			SortOrder: backend.SortAsc,
 		}
 
-		result, err := mnt.Metadata.QueryMeta(ctx, query)
+		result, err := mnt.Metadata.QueryMeta(ctx, namespace, query)
 		if err != nil {
 			vfs.log.Error("ReadDirectory: metadata query failed for %s - %v", absolute, err)
 			return nil, err
@@ -586,7 +592,7 @@ func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string
 	if !foundInMetadata {
 		vfs.log.Debug("ReadDirectory: reading from object storage backend for %s", absolute)
 		// Use storage backend to list objects
-		stats, err := mnt.ObjectStorage.ListObjects(ctx, relative)
+		stats, err := mnt.ObjectStorage.ListObjects(ctx, namespace, relative)
 		if err != nil {
 			// If directory doesn't exist but we're at a mount point root, that's OK - just empty
 			if err == data.ErrNotExist && relative == "" {
@@ -621,7 +627,7 @@ func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string
 					metaForSync := meta.Clone()
 					metaForSync.Key = fullKey
 					vfs.log.Debug("ReadDirectory: syncing entry %s to metadata", metaForSync.Key)
-					if err := mnt.Metadata.CreateMeta(ctx, metaForSync); err != nil {
+					if err := mnt.Metadata.CreateMeta(ctx, namespace, metaForSync); err != nil {
 						vfs.log.Warn("ReadDirectory: failed to sync metadata for %s - %v (continuing)", metaForSync.Key, err)
 						continue // Ignore errors for existing metadata
 					}
@@ -709,15 +715,16 @@ func (vfs *virtualFileSystemImpl) CreateDirectory(ctx context.Context, path stri
 		return err
 	}
 	// Fail if mount is readonly
-	if mnt.Options.ReadOnly {
+	if mnt.Options.IsReadOnly {
 		vfs.log.Error("CreateDirectory: cannot create directory on read-only mount at %s", mnt.Path)
 		return data.ErrReadOnly
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	namespace := mnt.Options.Namespace
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
 	// Check if path exists in metadata
 	if mnt.Metadata != nil {
-		if exists, _ := mnt.Metadata.ExistsMeta(ctx, relative); exists {
+		if exists, _ := mnt.Metadata.ExistsMeta(ctx, namespace, relative); exists {
 			vfs.log.Error("CreateDirectory: directory %s already exists in metadata", absolute)
 			return data.ErrExist
 		}
@@ -725,7 +732,7 @@ func (vfs *virtualFileSystemImpl) CreateDirectory(ctx context.Context, path stri
 
 	// Create folder in object storage
 	vfs.log.Debug("CreateDirectory: creating directory in object storage for %s", absolute)
-	stat, err := mnt.ObjectStorage.CreateObject(ctx, relative, data.ModeDir|0x777)
+	stat, err := mnt.ObjectStorage.CreateObject(ctx, namespace, relative, data.ModeDir|0x777)
 	if err != nil {
 		// Fail if any error except Exists
 		if err != data.ErrExist {
@@ -738,7 +745,7 @@ func (vfs *virtualFileSystemImpl) CreateDirectory(ctx context.Context, path stri
 		vfs.log.Debug("CreateDirectory: syncing directory to metadata for %s", absolute)
 		// In case stat hasn't been provided from 'CreateObject'
 		if stat == nil {
-			stat, err = mnt.ObjectStorage.HeadObject(ctx, relative)
+			stat, err = mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 			if err != nil {
 				vfs.log.Error("CreateDirectory: failed to read directory stat for %s - %v", absolute, err)
 				return err
@@ -746,7 +753,7 @@ func (vfs *virtualFileSystemImpl) CreateDirectory(ctx context.Context, path stri
 		}
 
 		meta := stat.ToMetadata()
-		if err := mnt.Metadata.CreateMeta(ctx, meta); err != nil {
+		if err := mnt.Metadata.CreateMeta(ctx, namespace, meta); err != nil {
 			vfs.log.Error("CreateDirectory: failed to sync directory metadata for %s - %v", absolute, err)
 			return err
 		}
@@ -784,18 +791,19 @@ func (vfs *virtualFileSystemImpl) RemoveDirectory(ctx context.Context, path stri
 		return err
 	}
 	// Fail if mount is readonly
-	if mnt.Options.ReadOnly {
+	if mnt.Options.IsReadOnly {
 		vfs.log.Error("RemoveDirectory: cannot remove directory on read-only mount at %s", mnt.Path)
 		return data.ErrReadOnly
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	namespace := mnt.Options.Namespace
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
 
 	var stat *data.FileStat
 	// Check if path exists in metadata
 	if mnt.Metadata != nil {
 		vfs.log.Debug("RemoveDirectory: checking directory existence using metadata for %s", absolute)
-		meta, err := mnt.Metadata.ReadMeta(ctx, relative)
+		meta, err := mnt.Metadata.ReadMeta(ctx, namespace, relative)
 		if err != nil {
 			vfs.log.Error("RemoveDirectory: metadata read failed for %s - %v", absolute, err)
 			return err
@@ -805,7 +813,7 @@ func (vfs *virtualFileSystemImpl) RemoveDirectory(ctx context.Context, path stri
 		vfs.log.Debug("RemoveDirectory: found directory in metadata (mode=%s)", stat.Mode)
 	} else {
 		vfs.log.Debug("RemoveDirectory: checking directory existence using object storage for %s", absolute)
-		stat, err = mnt.ObjectStorage.HeadObject(ctx, relative)
+		stat, err = mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 		if err != nil {
 			vfs.log.Error("RemoveDirectory: object storage HeadObject failed for %s - %v", absolute, err)
 			return err
@@ -827,7 +835,7 @@ func (vfs *virtualFileSystemImpl) RemoveDirectory(ctx context.Context, path stri
 				Limit:     1, // Only need to know if ANY children exist
 			}
 
-			result, err := mnt.Metadata.QueryMeta(ctx, query)
+			result, err := mnt.Metadata.QueryMeta(ctx, namespace, query)
 			if err != nil {
 				vfs.log.Error("RemoveDirectory: metadata query failed for %s - %v", absolute, err)
 				return err
@@ -840,7 +848,7 @@ func (vfs *virtualFileSystemImpl) RemoveDirectory(ctx context.Context, path stri
 			vfs.log.Debug("RemoveDirectory: directory %s is empty (validated via metadata)", absolute)
 		} else {
 			// Check object storage to see if directory is empty
-			entries, err := mnt.ObjectStorage.ListObjects(ctx, relative)
+			entries, err := mnt.ObjectStorage.ListObjects(ctx, namespace, relative)
 			if err != nil {
 				vfs.log.Error("RemoveDirectory: object storage ListObjects failed for %s - %v", absolute, err)
 				return err
@@ -859,7 +867,7 @@ func (vfs *virtualFileSystemImpl) RemoveDirectory(ctx context.Context, path stri
 	// Delete directory from object storage
 	// Force to specifically delete directories
 	vfs.log.Debug("RemoveDirectory: deleting directory from object storage for %s", absolute)
-	if err := mnt.ObjectStorage.DeleteObject(ctx, relative, true); err != nil {
+	if err := mnt.ObjectStorage.DeleteObject(ctx, namespace, relative, true); err != nil {
 		vfs.log.Error("RemoveDirectory: failed to delete directory from object storage for %s - %v", absolute, err)
 		return err
 	}
@@ -867,7 +875,7 @@ func (vfs *virtualFileSystemImpl) RemoveDirectory(ctx context.Context, path stri
 	if mnt.Metadata != nil && !mnt.IsDualMount {
 		vfs.log.Debug("RemoveDirectory: syncing deletion to metadata for %s", absolute)
 		// TODO :: For directories we need to delete all child metadata
-		if err := mnt.Metadata.DeleteMeta(ctx, relative); err != nil {
+		if err := mnt.Metadata.DeleteMeta(ctx, namespace, relative); err != nil {
 			vfs.log.Error("RemoveDirectory: failed to delete metadata for %s - %v", absolute, err)
 			return err
 		}
@@ -905,18 +913,19 @@ func (vfs *virtualFileSystemImpl) UnlinkFile(ctx context.Context, path string) e
 		return err
 	}
 	// Fail if mount is readonly
-	if mnt.Options.ReadOnly {
+	if mnt.Options.IsReadOnly {
 		vfs.log.Error("UnlinkFile: cannot unlink file on read-only mount at %s", mnt.Path)
 		return data.ErrReadOnly
 	}
 
-	relative := data.ToRelativePath(absolute, mnt.Path)
+	namespace := mnt.Options.Namespace
+	relative := vfs.getPrefixRelativePath(mnt, absolute)
 
 	var stat *data.FileStat
 	// Check if path exists in metadata
 	if mnt.Metadata != nil {
 		vfs.log.Debug("UnlinkFile: checking file existence using metadata for %s", absolute)
-		meta, err := mnt.Metadata.ReadMeta(ctx, relative)
+		meta, err := mnt.Metadata.ReadMeta(ctx, namespace, relative)
 		if err != nil {
 			vfs.log.Error("UnlinkFile: metadata read failed for %s - %v", absolute, err)
 			return err
@@ -926,7 +935,7 @@ func (vfs *virtualFileSystemImpl) UnlinkFile(ctx context.Context, path string) e
 		vfs.log.Debug("UnlinkFile: found file in metadata (size=%d mode=%s)", stat.Size, stat.Mode)
 	} else {
 		vfs.log.Debug("UnlinkFile: checking file existence using object storage for %s", absolute)
-		stat, err = mnt.ObjectStorage.HeadObject(ctx, relative)
+		stat, err = mnt.ObjectStorage.HeadObject(ctx, namespace, relative)
 		if err != nil {
 			vfs.log.Error("UnlinkFile: object storage HeadObject failed for %s - %v", absolute, err)
 			return err
@@ -941,14 +950,14 @@ func (vfs *virtualFileSystemImpl) UnlinkFile(ctx context.Context, path string) e
 	// Delete file from object storage
 	// Force to specifically deletes directories
 	vfs.log.Debug("UnlinkFile: deleting file from object storage for %s", absolute)
-	if err := mnt.ObjectStorage.DeleteObject(ctx, relative, false); err != nil {
+	if err := mnt.ObjectStorage.DeleteObject(ctx, namespace, relative, false); err != nil {
 		vfs.log.Error("UnlinkFile: failed to delete file from object storage for %s - %v", absolute, err)
 		return err
 	}
 	// Sync deletion to metadata if available
 	if mnt.Metadata != nil && !mnt.IsDualMount {
 		vfs.log.Debug("UnlinkFile: syncing deletion to metadata for %s", absolute)
-		if err := mnt.Metadata.DeleteMeta(ctx, relative); err != nil {
+		if err := mnt.Metadata.DeleteMeta(ctx, namespace, relative); err != nil {
 			vfs.log.Error("UnlinkFile: failed to delete metadata for %s - %v", absolute, err)
 			return err
 		}

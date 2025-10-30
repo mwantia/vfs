@@ -1,99 +1,75 @@
 package mount
 
 import (
+	"fmt"
+
 	"github.com/mwantia/vfs/mount/backend"
-	"github.com/mwantia/vfs/mount/extension/acl"
-	"github.com/mwantia/vfs/mount/extension/cache"
-	"github.com/mwantia/vfs/mount/extension/encrypt"
-	"github.com/mwantia/vfs/mount/extension/multipart"
-	"github.com/mwantia/vfs/mount/extension/rubbish"
-	"github.com/mwantia/vfs/mount/extension/snapshot"
-	"github.com/mwantia/vfs/mount/extension/versioning"
 )
 
 type MountOptions struct {
 	Backends map[backend.BackendCapability]backend.Backend
 
-	Auto        bool //
-	CacheReads  bool // Cache file reads
-	CacheWrites bool // Buffer writes before upload
-	ReadOnly    bool // Whether the mount is read-only.
-	Nesting     bool // Whether the mount allows for nested mountpoints.
+	Namespace      string
+	PathPrefix     string
+	AutoExtensions bool //
+	CacheReads     bool // Cache file reads
+	CacheWrites    bool // Buffer writes before upload
+	IsReadOnly     bool // Whether the mount is read-only.
+	AllowNesting   bool // Whether the mount allows for nested mountpoints.
 }
 
 type MountOption func(*MountOptions) error
 
+// newDefaultMountOptions create a default set of mount options
 func newDefaultMountOptions() *MountOptions {
 	return &MountOptions{
-		Backends:    make(map[backend.BackendCapability]backend.Backend),
-		Auto:        false,
-		CacheReads:  false,
-		CacheWrites: false,
-		ReadOnly:    false,
-		Nesting:     true,
+		Backends:     make(map[backend.BackendCapability]backend.Backend),
+		AllowNesting: true,
 	}
 }
 
-func WithACL(ext acl.AclBackendExtension) MountOption {
+// WithMetadata
+func WithMetadata(metadata backend.MetadataBackend) MountOption {
 	return func(vmo *MountOptions) error {
-		vmo.Backends[backend.CapabilityACL] = ext
+		vmo.Backends[backend.CapabilityMetadata] = metadata
 		return nil
 	}
 }
 
-func WithCache(ext cache.CacheBackendExtension) MountOption {
-	return func(vmo *MountOptions) error {
-		vmo.Backends[backend.CapabilityCache] = ext
+// WithExtension
+func WithExtension(ext backend.Backend, caps ...backend.BackendCapability) MountOption {
+	return func(mo *MountOptions) error {
+		for _, cap := range caps {
+			if _, exists := mo.Backends[cap]; exists {
+				return fmt.Errorf("capability already exists")
+			}
+
+			mo.Backends[cap] = ext
+		}
 		return nil
 	}
 }
 
-func WithEncrypt(ext encrypt.EncryptBackendExtension) MountOption {
-	return func(vmo *MountOptions) error {
-		vmo.Backends[backend.CapabilityEncrypt] = ext
+// WithNamespace
+func WithNamespace(namespace string) MountOption {
+	return func(mo *MountOptions) error {
+		mo.Namespace = namespace
 		return nil
 	}
 }
 
-func WithMetadata(ext backend.MetadataBackend) MountOption {
-	return func(vmo *MountOptions) error {
-		vmo.Backends[backend.CapabilityMetadata] = ext
+// WithPathPrefix
+func WithPathPrefix(pathPrefix string) MountOption {
+	return func(mo *MountOptions) error {
+		mo.PathPrefix = pathPrefix
 		return nil
 	}
 }
 
-func WithMultipart(ext multipart.MultipartBackendExtension) MountOption {
+// EnableAutoExtensions disables autosync, so the primary backend is only used as object-storage.
+func EnableAutoExtensions() MountOption {
 	return func(vmo *MountOptions) error {
-		vmo.Backends[backend.CapabilityMultipart] = ext
-		return nil
-	}
-}
-
-func WithRubbish(ext rubbish.RubbishBackendExtension) MountOption {
-	return func(vmo *MountOptions) error {
-		vmo.Backends[backend.CapabilityRubbish] = ext
-		return nil
-	}
-}
-
-func WithSnapshot(ext snapshot.SnapshotBackendExtension) MountOption {
-	return func(vmo *MountOptions) error {
-		vmo.Backends[backend.CapabilitySnapshot] = ext
-		return nil
-	}
-}
-
-func WithVersioning(ext versioning.VersioningBackendExtension) MountOption {
-	return func(vmo *MountOptions) error {
-		vmo.Backends[backend.CapabilityVersioning] = ext
-		return nil
-	}
-}
-
-// DisableAuto disables autosync, so the primary backend is only used as object-storage.
-func DisableAuto() MountOption {
-	return func(vmo *MountOptions) error {
-		vmo.Auto = false
+		vmo.AutoExtensions = true
 		return nil
 	}
 }
@@ -115,17 +91,17 @@ func WithCacheWrites() MountOption {
 }
 
 // WithDenyNesting specifies, if nested mountpoints are allowed within this mount.
-func DisableNesting() MountOption {
+func DisableMountNesting() MountOption {
 	return func(vmo *MountOptions) error {
-		vmo.Nesting = false
+		vmo.AllowNesting = false
 		return nil
 	}
 }
 
-// AsReadOnly specifies, if this mount is in a readonly state.
-func AsReadOnly() MountOption {
+// IsReadOnly specifies, if this mount is in a readonly state.
+func IsReadOnly() MountOption {
 	return func(vmo *MountOptions) error {
-		vmo.ReadOnly = true
+		vmo.IsReadOnly = true
 		return nil
 	}
 }

@@ -13,12 +13,7 @@ import (
 	"github.com/mwantia/vfs/data/errors"
 )
 
-// Namespace returns the identifier used as namespace
-func (_ *PostgresBackend) Namespace() string {
-	return ""
-}
-
-func (pb *PostgresBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
+func (pb *PostgresBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
@@ -46,7 +41,7 @@ func (pb *PostgresBackend) CreateObject(ctx context.Context, key string, mode da
 	return stat, pb.CreateMeta(ctx, meta)
 }
 
-func (pb *PostgresBackend) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (pb *PostgresBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	pb.mu.RLock()
 	defer pb.mu.RUnlock()
 
@@ -92,7 +87,7 @@ func (pb *PostgresBackend) ReadObject(ctx context.Context, key string, offset in
 	return n, nil
 }
 
-func (pb *PostgresBackend) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (pb *PostgresBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
@@ -187,7 +182,7 @@ func (pb *PostgresBackend) WriteObject(ctx context.Context, key string, offset i
 	return len(dat), nil
 }
 
-func (pb *PostgresBackend) DeleteObject(ctx context.Context, key string, force bool) error {
+func (pb *PostgresBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
@@ -236,7 +231,7 @@ func (pb *PostgresBackend) DeleteObject(ctx context.Context, key string, force b
 	return pb.DeleteMeta(ctx, key)
 }
 
-func (pb *PostgresBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
+func (pb *PostgresBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
 	pb.mu.RLock()
 	defer pb.mu.RUnlock()
 
@@ -318,7 +313,7 @@ func (pb *PostgresBackend) ListObjects(ctx context.Context, key string) ([]*data
 	return result, nil
 }
 
-func (pb *PostgresBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
+func (pb *PostgresBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
 	pb.mu.RLock()
 	defer pb.mu.RUnlock()
 
@@ -330,7 +325,7 @@ func (pb *PostgresBackend) HeadObject(ctx context.Context, key string) (*data.Fi
 	return meta.ToStat(), nil
 }
 
-func (pb *PostgresBackend) TruncateObject(ctx context.Context, key string, size int64) error {
+func (pb *PostgresBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 

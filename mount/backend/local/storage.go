@@ -12,12 +12,7 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-// Namespace returns the identifier used as namespace
-func (_ *LocalBackend) Namespace() string {
-	return ""
-}
-
-func (lb *LocalBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
+func (lb *LocalBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -48,7 +43,7 @@ func (lb *LocalBackend) CreateObject(ctx context.Context, key string, mode data.
 	}, file.Close()
 }
 
-func (lb *LocalBackend) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (lb *LocalBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
@@ -81,7 +76,7 @@ func (lb *LocalBackend) ReadObject(ctx context.Context, key string, offset int64
 	return n, err
 }
 
-func (lb *LocalBackend) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (lb *LocalBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -109,7 +104,7 @@ func (lb *LocalBackend) WriteObject(ctx context.Context, key string, offset int6
 	return file.Write(dat)
 }
 
-func (lb *LocalBackend) DeleteObject(ctx context.Context, key string, force bool) error {
+func (lb *LocalBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -135,7 +130,7 @@ func (lb *LocalBackend) DeleteObject(ctx context.Context, key string, force bool
 	return os.Remove(fullPath)
 }
 
-func (lb *LocalBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
+func (lb *LocalBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
@@ -177,7 +172,7 @@ func (lb *LocalBackend) ListObjects(ctx context.Context, key string) ([]*data.Fi
 	return stats, nil
 }
 
-func (lb *LocalBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
+func (lb *LocalBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
@@ -198,7 +193,7 @@ func (lb *LocalBackend) HeadObject(ctx context.Context, key string) (*data.FileS
 	return lb.toFileStat(key, info), nil
 }
 
-func (lb *LocalBackend) TruncateObject(ctx context.Context, key string, size int64) error {
+func (lb *LocalBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 

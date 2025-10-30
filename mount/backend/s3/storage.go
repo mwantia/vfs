@@ -12,12 +12,7 @@ import (
 	"github.com/mwantia/vfs/data/errors"
 )
 
-// Namespace returns the identifier used as namespace
-func (_ *S3Backend) Namespace() string {
-	return ""
-}
-
-func (sb *S3Backend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
+func (sb *S3Backend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -58,7 +53,7 @@ func (sb *S3Backend) CreateObject(ctx context.Context, key string, mode data.Fil
 	}, nil
 }
 
-func (sb *S3Backend) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (sb *S3Backend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
@@ -99,7 +94,7 @@ func (sb *S3Backend) ReadObject(ctx context.Context, key string, offset int64, d
 	return n, nil
 }
 
-func (sb *S3Backend) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (sb *S3Backend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -157,7 +152,7 @@ func (sb *S3Backend) WriteObject(ctx context.Context, key string, offset int64, 
 	return len(dat), nil
 }
 
-func (sb *S3Backend) DeleteObject(ctx context.Context, key string, force bool) error {
+func (sb *S3Backend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -217,7 +212,7 @@ func (sb *S3Backend) DeleteObject(ctx context.Context, key string, force bool) e
 	return sb.client.RemoveObject(ctx, sb.bucketName, key, minio.RemoveObjectOptions{})
 }
 
-func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
+func (sb *S3Backend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
@@ -317,7 +312,7 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.FileS
 	return nil, err
 }
 
-func (sb *S3Backend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
+func (sb *S3Backend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
@@ -344,7 +339,7 @@ func (sb *S3Backend) HeadObject(ctx context.Context, key string) (*data.FileStat
 	return sb.toFileStat(key, objInfo), nil
 }
 
-func (sb *S3Backend) TruncateObject(ctx context.Context, key string, size int64) error {
+func (sb *S3Backend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 

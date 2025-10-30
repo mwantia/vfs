@@ -86,6 +86,8 @@ func (ms *MountStreamer) Read(p []byte) (n int, err error) {
 		return 0, data.ErrClosed
 	}
 
+	namespace := ms.mnt.Options.Namespace
+
 	ms.log.Debug("Read: reading up to %d bytes from %s at offset %d", len(p), ms.path, ms.offset)
 
 	if !ms.flags.IsReadOnly() && !ms.flags.IsReadWrite() {
@@ -100,7 +102,7 @@ func (ms *MountStreamer) Read(p []byte) (n int, err error) {
 	default:
 	}
 
-	n, err = ms.mnt.ObjectStorage.ReadObject(ms.ctx, ms.path, ms.offset, p)
+	n, err = ms.mnt.ObjectStorage.ReadObject(ms.ctx, namespace, ms.path, ms.offset, p)
 	if n > 0 {
 		ms.offset += int64(n)
 		ms.log.Debug("Read: read %d bytes from %s, new offset=%d", n, ms.path, ms.offset)
@@ -125,6 +127,8 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 		return 0, data.ErrClosed
 	}
 
+	namespace := ms.mnt.Options.Namespace
+
 	ms.log.Debug("Write: writing %d bytes to %s at offset %d", len(p), ms.path, ms.offset)
 
 	if !ms.flags.IsWriteOnly() && !ms.flags.IsReadWrite() {
@@ -144,11 +148,11 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 	// Validate using metadata first if available
 	if ms.mnt.Metadata != nil {
 		ms.log.Debug("Write: validating file using metadata for %s", ms.path)
-		meta, err := ms.mnt.Metadata.ReadMeta(ms.ctx, ms.path)
+		meta, err := ms.mnt.Metadata.ReadMeta(ms.ctx, namespace, ms.path)
 		if err != nil {
 			ms.log.Debug("Write: metadata not found, falling back to object storage for %s", ms.path)
 			// Metadata doesn't exist - try to populate from storage
-			stat, statErr := ms.mnt.ObjectStorage.HeadObject(ms.ctx, ms.path)
+			stat, statErr := ms.mnt.ObjectStorage.HeadObject(ms.ctx, namespace, ms.path)
 			if statErr != nil {
 				ms.log.Error("Write: failed to read object stat for %s - %v", ms.path, statErr)
 				return 0, statErr
@@ -157,7 +161,7 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 			meta = stat.ToMetadata()
 			if !ms.mnt.IsDualMount && ms.mnt.Metadata != nil {
 				ms.log.Debug("Write: syncing object stat to metadata for %s", ms.path)
-				if createErr := ms.mnt.Metadata.CreateMeta(ms.ctx, meta); createErr != nil {
+				if createErr := ms.mnt.Metadata.CreateMeta(ms.ctx, namespace, meta); createErr != nil {
 					ms.log.Error("Write: failed to sync metadata for %s - %v", ms.path, createErr)
 					return 0, createErr
 				}
@@ -173,7 +177,7 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 	} else {
 		// No metadata backend - get size from object storage
 		ms.log.Debug("Write: getting file size from object storage for %s", ms.path)
-		stat, statErr := ms.mnt.ObjectStorage.HeadObject(ms.ctx, ms.path)
+		stat, statErr := ms.mnt.ObjectStorage.HeadObject(ms.ctx, namespace, ms.path)
 		if statErr != nil {
 			ms.log.Error("Write: failed to read object stat for %s - %v", ms.path, statErr)
 			return 0, statErr
@@ -211,7 +215,7 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 
 	// Write to storage backend
 	ms.log.Debug("Write: writing to object storage for %s", ms.path)
-	n, err = ms.mnt.ObjectStorage.WriteObject(ms.ctx, ms.path, ms.offset, p)
+	n, err = ms.mnt.ObjectStorage.WriteObject(ms.ctx, namespace, ms.path, ms.offset, p)
 	if err != nil {
 		ms.log.Error("Write: failed to write to object storage for %s - %v", ms.path, err)
 		return n, err
@@ -230,7 +234,7 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 				},
 			}
 
-			if err := ms.mnt.Metadata.UpdateMeta(ms.ctx, ms.path, update); err != nil {
+			if err := ms.mnt.Metadata.UpdateMeta(ms.ctx, ms.path, namespace, update); err != nil {
 				ms.log.Warn("Write: failed to update metadata for %s - %v", ms.path, err)
 				return 0, err
 			}
@@ -250,6 +254,8 @@ func (ms *MountStreamer) Seek(offset int64, whence int) (int64, error) {
 		return 0, data.ErrClosed
 	}
 
+	namespace := ms.mnt.Options.Namespace
+
 	ms.log.Debug("Seek: seeking %s (offset=%d whence=%d)", ms.path, offset, whence)
 
 	var newOffset int64
@@ -265,7 +271,7 @@ func (ms *MountStreamer) Seek(offset int64, whence int) (int64, error) {
 		// Should be avoided at all cost, since we need to get the file size
 		if ms.mnt.Metadata != nil {
 			ms.log.Debug("Seek: getting file size from metadata for %s", ms.path)
-			meta, err := ms.mnt.Metadata.ReadMeta(ms.ctx, ms.path)
+			meta, err := ms.mnt.Metadata.ReadMeta(ms.ctx, namespace, ms.path)
 			if err != nil {
 				ms.log.Error("Seek: failed to read metadata for %s - %v", ms.path, err)
 				return 0, err
@@ -275,7 +281,7 @@ func (ms *MountStreamer) Seek(offset int64, whence int) (int64, error) {
 		} else {
 			ms.log.Debug("Seek: getting file size from object storage for %s", ms.path)
 			// Fallback to storage to create metadata from object
-			stat, err := ms.mnt.ObjectStorage.HeadObject(ms.ctx, ms.path)
+			stat, err := ms.mnt.ObjectStorage.HeadObject(ms.ctx, namespace, ms.path)
 			if err != nil {
 				ms.log.Error("Seek: failed to read object stat for %s - %v", ms.path, err)
 				return 0, err
@@ -286,7 +292,7 @@ func (ms *MountStreamer) Seek(offset int64, whence int) (int64, error) {
 			if ms.mnt.Metadata != nil && !ms.mnt.IsDualMount {
 				ms.log.Debug("Seek: syncing object stat to metadata for %s", ms.path)
 				meta := stat.ToMetadata()
-				if err := ms.mnt.Metadata.CreateMeta(ms.ctx, meta); err != nil {
+				if err := ms.mnt.Metadata.CreateMeta(ms.ctx, namespace, meta); err != nil {
 					ms.log.Warn("Seek: failed to sync metadata for %s - %v", ms.path, err)
 					return 0, err
 				}

@@ -11,13 +11,8 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-// Namespace returns the identifier used as namespace
-func (_ *ConsulBackend) Namespace() string {
-	return ""
-}
-
 // CreateObject creates a new object (file or directory)
-func (cb *ConsulBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
+func (cb *ConsulBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
@@ -99,7 +94,7 @@ func (cb *ConsulBackend) CreateObject(ctx context.Context, key string, mode data
 }
 
 // ReadObject reads data from an object at a given offset
-func (cb *ConsulBackend) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (cb *ConsulBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 
@@ -138,7 +133,7 @@ func (cb *ConsulBackend) ReadObject(ctx context.Context, key string, offset int6
 }
 
 // WriteObject writes data to an object at a given offset
-func (cb *ConsulBackend) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (cb *ConsulBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
@@ -191,7 +186,7 @@ func (cb *ConsulBackend) WriteObject(ctx context.Context, key string, offset int
 }
 
 // DeleteObject deletes an object (file or directory)
-func (cb *ConsulBackend) DeleteObject(ctx context.Context, key string, force bool) error {
+func (cb *ConsulBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
@@ -242,7 +237,7 @@ func (cb *ConsulBackend) DeleteObject(ctx context.Context, key string, force boo
 }
 
 // ListObjects lists all objects under a given key (directory)
-func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
+func (cb *ConsulBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 
@@ -343,7 +338,7 @@ func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.F
 }
 
 // HeadObject returns metadata about an object
-func (cb *ConsulBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
+func (cb *ConsulBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 
@@ -386,7 +381,7 @@ func (cb *ConsulBackend) HeadObject(ctx context.Context, key string) (*data.File
 }
 
 // TruncateObject truncates an object to a specific size
-func (cb *ConsulBackend) TruncateObject(ctx context.Context, key string, size int64) error {
+func (cb *ConsulBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 

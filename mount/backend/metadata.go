@@ -11,15 +11,15 @@ import (
 type MetadataBackend interface {
 	Backend
 
-	CreateMeta(ctx context.Context, meta *data.Metadata) error
+	CreateMeta(ctx context.Context, namespace string, meta *data.Metadata) error
 
-	ReadMeta(ctx context.Context, key string) (*data.Metadata, error)
+	ReadMeta(ctx context.Context, namespace string, key string) (*data.Metadata, error)
 
-	UpdateMeta(ctx context.Context, key string, update *data.MetadataUpdate) error
+	UpdateMeta(ctx context.Context, namespace string, key string, update *data.MetadataUpdate) error
 
-	DeleteMeta(ctx context.Context, key string) error
+	DeleteMeta(ctx context.Context, namespace string, key string) error
 
-	ExistsMeta(ctx context.Context, key string) (bool, error)
+	ExistsMeta(ctx context.Context, namespace string, key string) (bool, error)
 
-	QueryMeta(ctx context.Context, query *MetadataQuery) (*MetadataQueryResult, error)
+	QueryMeta(ctx context.Context, namespace string, query *MetadataQuery) (*MetadataQueryResult, error)
 }

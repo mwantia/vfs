@@ -13,6 +13,7 @@ import (
 	"github.com/mwantia/vfs/mount/backend/consul"
 	"github.com/mwantia/vfs/mount/backend/memory"
 	"github.com/mwantia/vfs/mount/backend/s3"
+	"github.com/mwantia/vfs/mount/backend/sqlite"
 
 	"github.com/mwantia/vfs/cli/tui"
 )
@@ -30,6 +31,11 @@ func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 		return nil, fmt.Errorf("failed to mount: %w", err)
 	}
 
+	metadata, err := sqlite.NewSQLiteBackend("./test/metadata.db")
+	if err != nil {
+		return nil, err
+	}
+
 	endpoint := os.Getenv("VFS_DEMO_ENDPOINT")
 	accessKey := os.Getenv("VFS_DEMO_ACCESS_KEY")
 	secretKey := os.Getenv("VFS_DEMO_SECRET_KEY")
@@ -40,7 +46,7 @@ func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 			return nil, err
 		}
 
-		if err := fs.Mount(ctx, "/gosync", gosync, mount.AsReadOnly(), mount.DisableAuto()); err != nil {
+		if err := fs.Mount(ctx, "/gosync", gosync, mount.IsReadOnly(), mount.WithMetadata(metadata), mount.WithNamespace("gosync")); err != nil {
 			return nil, fmt.Errorf("failed to mount: %w", err)
 		}
 
@@ -49,7 +55,7 @@ func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 			return nil, err
 		}
 
-		if err := fs.Mount(ctx, "/global", global, mount.AsReadOnly(), mount.DisableAuto()); err != nil {
+		if err := fs.Mount(ctx, "/global", global, mount.IsReadOnly(), mount.WithMetadata(metadata), mount.WithNamespace("global")); err != nil {
 			return nil, fmt.Errorf("failed to mount: %w", err)
 		}
 	}
@@ -65,7 +71,7 @@ func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := fs.Mount(ctx, "/consul", consul, mount.DisableAuto()); err != nil {
+		if err := fs.Mount(ctx, "/consul", consul, mount.IsReadOnly(), mount.WithMetadata(metadata), mount.WithNamespace("consul"), mount.WithPathPrefix("/")); err != nil {
 			return nil, fmt.Errorf("failed to mount: %w", err)
 		}
 	}

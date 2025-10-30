@@ -9,19 +9,17 @@ import (
 type ObjectStorageBackend interface {
 	Backend
 
-	Namespace() string
+	CreateObject(ctx context.Context, namespace string, key string, mode data.FileMode) (*data.FileStat, error)
 
-	CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error)
+	ReadObject(ctx context.Context, namespace string, key string, offset int64, data []byte) (int, error)
 
-	ReadObject(ctx context.Context, key string, offset int64, data []byte) (int, error)
+	WriteObject(ctx context.Context, namespace string, key string, offset int64, data []byte) (int, error)
 
-	WriteObject(ctx context.Context, key string, offset int64, data []byte) (int, error)
+	DeleteObject(ctx context.Context, namespace string, key string, force bool) error
 
-	DeleteObject(ctx context.Context, key string, force bool) error
+	ListObjects(ctx context.Context, namespace string, key string) ([]*data.FileStat, error)
 
-	ListObjects(ctx context.Context, key string) ([]*data.FileStat, error)
+	HeadObject(ctx context.Context, namespace string, key string) (*data.FileStat, error)
 
-	HeadObject(ctx context.Context, key string) (*data.FileStat, error)
-
-	TruncateObject(ctx context.Context, key string, size int64) error
+	TruncateObject(ctx context.Context, namespace string, key string, size int64) error
 }

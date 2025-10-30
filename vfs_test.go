@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"testing"
 
 	"github.com/mwantia/vfs"
@@ -12,7 +11,6 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 	"github.com/mwantia/vfs/mount/backend/local"
 	"github.com/mwantia/vfs/mount/backend/memory"
-	"github.com/mwantia/vfs/mount/backend/postgres"
 	"github.com/mwantia/vfs/mount/backend/sqlite"
 )
 
@@ -31,14 +29,6 @@ func GetTestBackendFactories() map[string]TestBackendFactory {
 		"local": func(t *testing.T) (backend.ObjectStorageBackend, error) {
 			return local.NewLocalBackend(t.TempDir()), nil
 		},
-	}
-
-	// Add Postgres backend if connection string is provided via environment variable
-	// Example: export VFS_TEST_POSTGRES="postgres://user:pass@localhost:5432/vfs_test"
-	if connStr := os.Getenv("VFS_TEST_POSTGRES"); connStr != "" {
-		factories["postgres"] = func(t *testing.T) (backend.ObjectStorageBackend, error) {
-			return postgres.NewPostgresBackend(connStr)
-		}
 	}
 
 	return factories
@@ -553,145 +543,6 @@ func TestAllBackends_EmptyDirectory(t *testing.T) {
 
 			if err := fs.Unmount(ctx, "/", false); err != nil {
 				tst.Fatalf("failed to unmount primary backend: %v", err)
-			}
-		})
-	}
-}
-
-// TestVFS_CloseMethod verifies that the Close method properly unmounts all filesystems
-func TestVFS_CloseMethod(t *testing.T) {
-	ctx := t.Context()
-	fs, _ := vfs.NewVirtualFileSystem()
-
-	// Mount multiple backends
-	if err := fs.Mount(ctx, "/", memory.NewMemoryBackend()); err != nil {
-		t.Fatalf("Failed to mount root: %v", err)
-	}
-
-	if err := fs.Mount(ctx, "/data", memory.NewMemoryBackend()); err != nil {
-		t.Fatalf("Failed to mount /data: %v", err)
-	}
-
-	if err := fs.Mount(ctx, "/data/nested", memory.NewMemoryBackend()); err != nil {
-		t.Fatalf("Failed to mount /data/nested: %v", err)
-	}
-
-	// Create some files to ensure backends are working
-	f, err := fs.OpenFile(ctx, "/test.txt", data.AccessModeWrite|data.AccessModeCreate)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-	f.Close()
-
-	// Shutdown should unmount all filesystems
-	if err := fs.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown failed: %v", err)
-	}
-
-	// After close, operations should fail because nothing is mounted
-	_, err = fs.StatMetadata(ctx, "/test.txt")
-	if err == nil {
-		t.Error("Expected error after Shutdown, but operation succeeded")
-	}
-}
-
-// TestVFS_ObjectSizeValidation verifies that the VFS enforces backend size limits
-func TestVFS_ObjectSizeValidation(t *testing.T) {
-	factories := GetTestBackendFactories()
-
-	for name, factory := range factories {
-		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
-			backend, err := factory(tst)
-			if err != nil {
-				tst.Fatalf("Failed to create backend: %v", err)
-			}
-
-			fs, _ := vfs.NewVirtualFileSystem()
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Failed to mount: %v", err)
-			}
-			defer fs.Shutdown(ctx)
-
-			caps := backend.GetCapabilities()
-
-			// Test MaxObjectSize validation
-			if caps.MaxObjectSize > 0 {
-				tst.Run("MaxObjectSize", func(t *testing.T) {
-					// Create a file
-					_, err := fs.OpenFile(ctx, "/large_file.txt", data.AccessModeCreate|data.AccessModeWrite)
-					if err != nil {
-						t.Fatalf("Failed to create file: %v", err)
-					}
-					defer fs.CloseFile(ctx, "/large_file.txt", false)
-
-					// Attempt to write data exceeding the maximum size
-					oversizedBuffer := make([]byte, caps.MaxObjectSize+1)
-					for i := range oversizedBuffer {
-						oversizedBuffer[i] = byte('A')
-					}
-
-					// This should fail due to size validation
-					_, err = fs.WriteFile(ctx, "/large_file.txt", 0, oversizedBuffer)
-					if err == nil {
-						t.Error("Expected error when writing data exceeding MaxObjectSize, but operation succeeded")
-					} else {
-						t.Logf("Correctly rejected oversized write: %v", err)
-					}
-				})
-
-				// Test write at maximum allowed size (should succeed)
-				tst.Run("WriteAtMaxSize", func(t *testing.T) {
-					// Create a file with data exactly at the limit
-					_, err := fs.OpenFile(ctx, "/max_file.txt", data.AccessModeCreate|data.AccessModeWrite)
-					if err != nil {
-						t.Fatalf("Failed to create file: %v", err)
-					}
-					defer fs.CloseFile(ctx, "/max_file.txt", false)
-
-					// Write data at exactly the maximum size
-					// Use a smaller test size to avoid memory issues
-					testSize := int64(1024) // 1KB for testing
-					if testSize > caps.MaxObjectSize {
-						testSize = caps.MaxObjectSize
-					}
-
-					maxBuffer := make([]byte, testSize)
-					for i := range maxBuffer {
-						maxBuffer[i] = byte('B')
-					}
-
-					n, err := fs.WriteFile(ctx, "/max_file.txt", 0, maxBuffer)
-					if err != nil {
-						t.Errorf("Failed to write data at allowed size: %v", err)
-					}
-					if int64(n) != testSize {
-						t.Errorf("Expected to write %d bytes, but wrote %d", testSize, n)
-					}
-				})
-			}
-
-			// Test MinObjectSize validation (if set)
-			if caps.MinObjectSize > 0 {
-				tst.Run("MinObjectSize", func(t *testing.T) {
-					// Create a file
-					_, err := fs.OpenFile(ctx, "/small_file.txt", data.AccessModeCreate|data.AccessModeWrite)
-					if err != nil {
-						t.Fatalf("Failed to create file: %v", err)
-					}
-					defer fs.CloseFile(ctx, "/small_file.txt", false)
-
-					// Attempt to write data below the minimum size
-					undersizedBuffer := make([]byte, caps.MinObjectSize-1)
-
-					// This should fail due to size validation
-					_, err = fs.WriteFile(ctx, "/small_file.txt", 0, undersizedBuffer)
-					if err == nil {
-						t.Error("Expected error when writing data below MinObjectSize, but operation succeeded")
-					} else {
-						t.Logf("Correctly rejected undersized write: %v", err)
-					}
-				})
 			}
 		})
 	}

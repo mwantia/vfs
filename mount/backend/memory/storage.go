@@ -10,12 +10,7 @@ import (
 	"github.com/mwantia/vfs/data/errors"
 )
 
-// Namespace returns the identifier used as namespace
-func (_ *MemoryBackend) Namespace() string {
-	return ""
-}
-
-func (mb *MemoryBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
+func (mb *MemoryBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
@@ -45,14 +40,14 @@ func (mb *MemoryBackend) CreateObject(ctx context.Context, key string, mode data
 	meta := data.NewFileMetadata(key, 0, mode)
 	stat := meta.ToStat()
 
-	return stat, mb.CreateMeta(ctx, meta)
+	return stat, mb.CreateMeta(ctx, namespace, meta)
 }
 
-func (mb *MemoryBackend) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (mb *MemoryBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	mb.mu.RLock()
 	defer mb.mu.RUnlock()
 
-	meta, err := mb.ReadMeta(ctx, key)
+	meta, err := mb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return 0, err
 	}
@@ -78,11 +73,11 @@ func (mb *MemoryBackend) ReadObject(ctx context.Context, key string, offset int6
 	return n, nil
 }
 
-func (mb *MemoryBackend) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (mb *MemoryBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
-	meta, err := mb.ReadMeta(ctx, key)
+	meta, err := mb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return 0, err
 	}
@@ -122,18 +117,18 @@ func (mb *MemoryBackend) WriteObject(ctx context.Context, key string, offset int
 		Metadata: meta,
 	}
 
-	if err := mb.UpdateMeta(ctx, key, update); err != nil {
+	if err := mb.UpdateMeta(ctx, namespace, key, update); err != nil {
 		return 0, err
 	}
 
 	return len(dat), nil
 }
 
-func (mb *MemoryBackend) DeleteObject(ctx context.Context, key string, force bool) error {
+func (mb *MemoryBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
-	meta, err := mb.ReadMeta(ctx, key)
+	meta, err := mb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return err
 	}
@@ -166,7 +161,7 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, key string, force boo
 
 		// Delete all collected paths
 		for _, delKey := range keysToDelete {
-			if err := mb.DeleteMeta(ctx, delKey); err != nil {
+			if err := mb.DeleteMeta(ctx, namespace, delKey); err != nil {
 				errs.Add(err)
 			}
 		}
@@ -174,16 +169,16 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, key string, force boo
 		return errs.Errors()
 	}
 
-	return mb.DeleteMeta(ctx, key)
+	return mb.DeleteMeta(ctx, namespace, key)
 }
 
-func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
+func (mb *MemoryBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
 	mb.mu.RLock()
 	defer mb.mu.RUnlock()
 
 	// For root directory, skip the existence check - root is implicit
 	if key != "" {
-		meta, err := mb.ReadMeta(ctx, key)
+		meta, err := mb.ReadMeta(ctx, namespace, key)
 		if err != nil {
 			return nil, err
 		}
@@ -232,7 +227,7 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.F
 			if _, seen := children[childName]; !seen {
 				// Look up the directory metadata
 				dirPath := prefixKey + childName
-				dirMeta, err := mb.ReadMeta(ctx, dirPath)
+				dirMeta, err := mb.ReadMeta(ctx, namespace, dirPath)
 				if err != nil {
 					print(err) // TODO :: This needs further finetuning - Do we just allow failed lookups?
 				} else {
@@ -241,7 +236,7 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.F
 
 			}
 		} else {
-			childMeta, err := mb.ReadMeta(ctx, childPath)
+			childMeta, err := mb.ReadMeta(ctx, namespace, childPath)
 			if err != nil {
 				print(err) // TODO :: This needs further finetuning - Do we just allow failed lookups?
 			} else {
@@ -262,11 +257,11 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.F
 	return result, nil
 }
 
-func (mb *MemoryBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
+func (mb *MemoryBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
 	mb.mu.RLock()
 	defer mb.mu.RUnlock()
 
-	meta, err := mb.ReadMeta(ctx, key)
+	meta, err := mb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return nil, err
 	}
@@ -274,11 +269,11 @@ func (mb *MemoryBackend) HeadObject(ctx context.Context, key string) (*data.File
 	return meta.ToStat(), nil
 }
 
-func (mb *MemoryBackend) TruncateObject(ctx context.Context, key string, size int64) error {
+func (mb *MemoryBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
-	meta, err := mb.ReadMeta(ctx, key)
+	meta, err := mb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return err
 	}
@@ -311,5 +306,5 @@ func (mb *MemoryBackend) TruncateObject(ctx context.Context, key string, size in
 		Metadata: meta,
 	}
 
-	return mb.UpdateMeta(ctx, key, update)
+	return mb.UpdateMeta(ctx, namespace, key, update)
 }

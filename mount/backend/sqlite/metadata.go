@@ -12,9 +12,10 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 )
 
-func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.Metadata) error {
+func (sb *SQLiteBackend) CreateMeta(ctx context.Context, namespace string, meta *data.Metadata) error {
 	// Check if key already exists in B-tree
-	if _, exists := sb.keys.Get(meta.Key); exists {
+	nsKey := backend.NamespacedKey(namespace, meta.Key)
+	if _, exists := sb.keys.Get(nsKey); exists {
 		return data.ErrExist
 	}
 
@@ -43,9 +44,9 @@ func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.Metadata) er
 	contentType := string(meta.ContentType)
 	// Insert into database
 	_, err := sb.db.ExecContext(ctx, `
-		INSERT INTO vfs_metadata (id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, meta.ID, meta.Key, int(meta.Mode), meta.Size,
+		INSERT INTO vfs_metadata (id, namespace, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, meta.ID, namespace, meta.Key, int(meta.Mode), meta.Size,
 		nullInt64(meta.UID), nullInt64(meta.GID),
 		meta.ModifyTime.Unix(), meta.AccessTime.Unix(), meta.CreateTime.Unix(),
 		nullString(contentType), nullString(meta.ETag), attributesJSON)
@@ -54,14 +55,15 @@ func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.Metadata) er
 		return err
 	}
 
-	// Update B-tree
-	sb.keys.Set(meta.Key, meta.ID)
+	// Update B-tree with namespaced key
+	sb.keys.Set(nsKey, meta.ID)
 	return nil
 }
 
-func (sb *SQLiteBackend) ReadMeta(ctx context.Context, key string) (*data.Metadata, error) {
+func (sb *SQLiteBackend) ReadMeta(ctx context.Context, namespace string, key string) (*data.Metadata, error) {
 	// Check B-tree first
-	id, exists := sb.keys.Get(key)
+	nsKey := backend.NamespacedKey(namespace, key)
+	id, exists := sb.keys.Get(nsKey)
 	if !exists {
 		return nil, data.ErrNotExist
 	}
@@ -121,15 +123,16 @@ func (sb *SQLiteBackend) ReadMeta(ctx context.Context, key string) (*data.Metada
 	return &meta, nil
 }
 
-func (sb *SQLiteBackend) UpdateMeta(ctx context.Context, key string, update *data.MetadataUpdate) error {
+func (sb *SQLiteBackend) UpdateMeta(ctx context.Context, namespace string, key string, update *data.MetadataUpdate) error {
 	// Check if key exists
-	id, exists := sb.keys.Get(key)
+	nsKey := backend.NamespacedKey(namespace, key)
+	id, exists := sb.keys.Get(nsKey)
 	if !exists {
 		return data.ErrNotExist
 	}
 
 	// Read current metadata
-	meta, err := sb.ReadMeta(ctx, key)
+	meta, err := sb.ReadMeta(ctx, namespace, key)
 	if err != nil {
 		return err
 	}
@@ -165,9 +168,10 @@ func (sb *SQLiteBackend) UpdateMeta(ctx context.Context, key string, update *dat
 	return err
 }
 
-func (sb *SQLiteBackend) DeleteMeta(ctx context.Context, key string) error {
+func (sb *SQLiteBackend) DeleteMeta(ctx context.Context, namespace string, key string) error {
 	// Check if key exists
-	id, exists := sb.keys.Get(key)
+	nsKey := backend.NamespacedKey(namespace, key)
+	id, exists := sb.keys.Get(nsKey)
 	if !exists {
 		return data.ErrNotExist
 	}
@@ -206,20 +210,21 @@ func (sb *SQLiteBackend) DeleteMeta(ctx context.Context, key string) error {
 		return err
 	}
 
-	// Remove from B-tree
-	sb.keys.Delete(key)
+	// Remove from B-tree using namespaced key
+	sb.keys.Delete(nsKey)
 	return nil
 }
 
-func (sb *SQLiteBackend) ExistsMeta(ctx context.Context, key string) (bool, error) {
-	_, exists := sb.keys.Get(key)
+func (sb *SQLiteBackend) ExistsMeta(ctx context.Context, namespace string, key string) (bool, error) {
+	nsKey := backend.NamespacedKey(namespace, key)
+	_, exists := sb.keys.Get(nsKey)
 	return exists, nil
 }
 
-func (sb *SQLiteBackend) QueryMeta(ctx context.Context, query *backend.MetadataQuery) (*backend.MetadataQueryResult, error) {
+func (sb *SQLiteBackend) QueryMeta(ctx context.Context, namespace string, query *backend.MetadataQuery) (*backend.MetadataQueryResult, error) {
 	// Build dynamic SQL query
-	sqlQuery := "SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes FROM vfs_metadata WHERE 1=1"
-	args := []interface{}{}
+	sqlQuery := "SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes FROM vfs_metadata WHERE namespace = ?"
+	args := []interface{}{namespace}
 
 	// Prefix and delimiter filter
 	if query.Delimiter == "/" {
