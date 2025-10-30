@@ -12,10 +12,10 @@ type Entry struct {
 	Name     string
 	Path     string
 	Size     int64
-	Mode     data.VirtualFileMode
+	Mode     data.FileMode
 	ModTime  time.Time
 	IsDir    bool
-	MimeType string
+	MimeType data.ContentType
 }
 
 // DisplayName returns the name with appropriate indicator

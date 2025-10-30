@@ -16,7 +16,7 @@ import (
 
 // OpenFile opens a file with the specified access mode flags and returns a file handle.
 // The returned VirtualFile must be closed by the caller. Use flags to control access.
-func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, flags data.VirtualAccessMode) (mount.Streamer, error) {
+func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, flags data.AccessMode) (mount.Streamer, error) {
 	// Always start with an absolute path
 	absolute, err := data.ToAbsolutePath(path)
 	if err != nil {
@@ -402,9 +402,9 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 	// Sync metadata information after successfull write
 	if mnt.Metadata != nil && !mnt.IsDualMount {
 		vfs.log.Debug("WriteFile: syncing updated size to metadata for %s (new_size=%d)", absolute, offset+int64(n))
-		update := &data.VirtualFileMetadataUpdate{
-			Mask: data.VirtualFileMetadataUpdateSize,
-			Metadata: &data.VirtualFileMetadata{
+		update := &data.MetadataUpdate{
+			Mask: data.MetadataUpdateSize,
+			Metadata: &data.Metadata{
 				Size: offset + int64(n),
 			},
 		}
@@ -420,7 +420,7 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 
 // Stat returns file information for the given path.
 // Returns an error if the path doesn't exist.
-func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string) (*data.VirtualFileMetadata, error) {
+func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string) (*data.Metadata, error) {
 	// Always start with an absolute path
 	absolute, err := data.ToAbsolutePath(path)
 	if err != nil {
@@ -447,7 +447,7 @@ func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string)
 			mountName = ""
 		}
 
-		return &data.VirtualFileMetadata{
+		return &data.Metadata{
 			ID:          absolute,
 			Key:         mountName,
 			Mode:        data.ModeMount | data.ModeDir | 0755,
@@ -520,7 +520,7 @@ func (vfs *virtualFileSystemImpl) LookupMetadata(ctx context.Context, path strin
 
 // ReadDirectory returns a list of entries in the directory at path.
 // Returns an error if the path is not a directory or doesn't exist.
-func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string) ([]*data.VirtualFileMetadata, error) {
+func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string) ([]*data.Metadata, error) {
 	// Always start with an absolute path
 	absolute, err := data.ToAbsolutePath(path)
 	if err != nil {
@@ -539,7 +539,7 @@ func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string
 	relative := data.ToRelativePath(absolute, mnt.Path)
 
 	// Use a map to track entries by key to avoid duplicates
-	metaMap := make(map[string]*data.VirtualFileMetadata)
+	metaMap := make(map[string]*data.Metadata)
 
 	// Try to get entries from metadata first if available
 	foundInMetadata := false
@@ -661,7 +661,7 @@ func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string
 			vfs.log.Debug("ReadDirectory: adding virtual mount point %s at %s", mountName, mountPath)
 			// Create virtual metadata for the mount point
 			now := time.Now()
-			metaMap[mountKey] = &data.VirtualFileMetadata{
+			metaMap[mountKey] = &data.Metadata{
 				ID:          mountPath, // Use mount path as ID
 				Key:         mountKey,
 				Mode:        data.ModeMount | data.ModeDir | 0755,
@@ -677,7 +677,7 @@ func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string
 	}
 
 	// Convert map back to slice and sort by key
-	metas := make([]*data.VirtualFileMetadata, 0, len(metaMap))
+	metas := make([]*data.Metadata, 0, len(metaMap))
 	for _, meta := range metaMap {
 		metas = append(metas, meta)
 	}
@@ -791,7 +791,7 @@ func (vfs *virtualFileSystemImpl) RemoveDirectory(ctx context.Context, path stri
 
 	relative := data.ToRelativePath(absolute, mnt.Path)
 
-	var stat *data.VirtualFileStat
+	var stat *data.FileStat
 	// Check if path exists in metadata
 	if mnt.Metadata != nil {
 		vfs.log.Debug("RemoveDirectory: checking directory existence using metadata for %s", absolute)
@@ -912,7 +912,7 @@ func (vfs *virtualFileSystemImpl) UnlinkFile(ctx context.Context, path string) e
 
 	relative := data.ToRelativePath(absolute, mnt.Path)
 
-	var stat *data.VirtualFileStat
+	var stat *data.FileStat
 	// Check if path exists in metadata
 	if mnt.Metadata != nil {
 		vfs.log.Debug("UnlinkFile: checking file existence using metadata for %s", absolute)

@@ -18,12 +18,12 @@ const (
 )
 
 // GetAttribute safely retrieves the attribute with a default value.
-func (vfm *VirtualFileMetadata) GetAttribute(key string, defaultValue string) string {
-	if vfm.Attributes == nil {
+func (m *Metadata) GetAttribute(key string, defaultValue string) string {
+	if m.Attributes == nil {
 		return defaultValue
 	}
 
-	if value, exists := vfm.Attributes[key]; exists {
+	if value, exists := m.Attributes[key]; exists {
 		return value
 	}
 
@@ -31,29 +31,29 @@ func (vfm *VirtualFileMetadata) GetAttribute(key string, defaultValue string) st
 }
 
 // SetAttribute safely sets attribute, initializing the map if needed.
-func (vfm *VirtualFileMetadata) SetAttribute(key, value string) {
-	if vfm.Attributes == nil {
-		vfm.Attributes = make(map[string]string)
+func (m *Metadata) SetAttribute(key, value string) {
+	if m.Attributes == nil {
+		m.Attributes = make(map[string]string)
 	}
 
-	vfm.Attributes[key] = value
-	vfm.ModifyTime = time.Now()
+	m.Attributes[key] = value
+	m.ModifyTime = time.Now()
 }
 
 // DeleteAttribute removes a attribute key.
-func (vfm *VirtualFileMetadata) DeleteAttribute(key string) {
-	if vfm.Attributes != nil {
-		delete(vfm.Attributes, key)
-		vfm.ModifyTime = time.Now()
+func (m *Metadata) DeleteAttribute(key string) {
+	if m.Attributes != nil {
+		delete(m.Attributes, key)
+		m.ModifyTime = time.Now()
 	}
 }
 
 // HasAttribute checks if a attribute key exists.
-func (vfm *VirtualFileMetadata) HasAttribute(key string) bool {
-	if vfm.Attributes == nil {
+func (m *Metadata) HasAttribute(key string) bool {
+	if m.Attributes == nil {
 		return false
 	}
 
-	_, exists := vfm.Attributes[key]
+	_, exists := m.Attributes[key]
 	return exists
 }

@@ -5,62 +5,62 @@ import (
 	"time"
 )
 
-// VirtualVirtualFileMetadataUpdateMask controls which fields of an inode should be updated.
+// MetadataUpdateMask controls which fields of an inode should be updated.
 // This allows partial updates without needing to fetch and write back entire inodes.
-type VirtualFileMetadataUpdateMask int
+type MetadataUpdateMask int
 
 const (
-	VirtualFileMetadataUpdateKey         VirtualFileMetadataUpdateMask = 1 << iota // Update Relative Path
-	VirtualFileMetadataUpdateStorageHash                                           // Update Storage Hash
-	VirtualFileMetadataUpdateStorageKey                                            // Update Storage Key
-	VirtualFileMetadataUpdateMode                                                  // Update File Mode (permissions)
-	VirtualFileMetadataUpdateSize                                                  // Update Size
-	VirtualFileMetadataUpdateUID                                                   // Update UID
-	VirtualFileMetadataUpdateGID                                                   // Update GID
-	VirtualFileMetadataUpdateAttributes                                            // Update Attributes map
+	MetadataUpdateKey         MetadataUpdateMask = 1 << iota // Update Relative Path
+	MetadataUpdateStorageHash                                // Update Storage Hash
+	MetadataUpdateStorageKey                                 // Update Storage Key
+	MetadataUpdateMode                                       // Update File Mode (permissions)
+	MetadataUpdateSize                                       // Update Size
+	MetadataUpdateUID                                        // Update UID
+	MetadataUpdateGID                                        // Update GID
+	MetadataUpdateAttributes                                 // Update Attributes map
 
-	VirtualFileMetadataUpdateAll = ^VirtualFileMetadataUpdateMask(0) // Update all fields
+	MetadataUpdateAll = ^MetadataUpdateMask(0) // Update all fields
 )
 
-// VirtualFileMetadataUpdate represents a partial update to an inode.
-type VirtualFileMetadataUpdate struct {
-	Mask     VirtualFileMetadataUpdateMask `json:"mask"`
-	Metadata *VirtualFileMetadata          `json:"metadata"`
+// MetadataUpdate represents a partial update to an inode.
+type MetadataUpdate struct {
+	Mask     MetadataUpdateMask `json:"mask"`
+	Metadata *Metadata          `json:"metadata"`
 }
 
 // Apply applies this update to an existing virtual file metadata.
-func (vfmu *VirtualFileMetadataUpdate) Apply(target *VirtualFileMetadata) (bool, error) {
+func (mu *MetadataUpdate) Apply(target *Metadata) (bool, error) {
 	// Use a dedicated value to check if any
 	// modification to the target has been done
 	modified := false
 
-	if vfmu.Mask&VirtualFileMetadataUpdateKey != 0 {
-		target.Key = vfmu.Metadata.Key
+	if mu.Mask&MetadataUpdateKey != 0 {
+		target.Key = mu.Metadata.Key
 		modified = true
 	}
 
-	if vfmu.Mask&VirtualFileMetadataUpdateMode != 0 {
-		target.Mode = vfmu.Metadata.Mode
+	if mu.Mask&MetadataUpdateMode != 0 {
+		target.Mode = mu.Metadata.Mode
 		modified = true
 	}
 
-	if vfmu.Mask&VirtualFileMetadataUpdateSize != 0 {
-		target.Size = vfmu.Metadata.Size
+	if mu.Mask&MetadataUpdateSize != 0 {
+		target.Size = mu.Metadata.Size
 		modified = true
 	}
 
-	if vfmu.Mask&VirtualFileMetadataUpdateUID != 0 {
-		target.UID = vfmu.Metadata.UID
+	if mu.Mask&MetadataUpdateUID != 0 {
+		target.UID = mu.Metadata.UID
 		modified = true
 	}
-	if vfmu.Mask&VirtualFileMetadataUpdateGID != 0 {
-		target.GID = vfmu.Metadata.GID
+	if mu.Mask&MetadataUpdateGID != 0 {
+		target.GID = mu.Metadata.GID
 		modified = true
 	}
 
-	if vfmu.Mask&VirtualFileMetadataUpdateAttributes != 0 {
-		target.Attributes = make(map[string]string, len(vfmu.Metadata.Attributes))
-		maps.Copy(target.Attributes, vfmu.Metadata.Attributes)
+	if mu.Mask&MetadataUpdateAttributes != 0 {
+		target.Attributes = make(map[string]string, len(mu.Metadata.Attributes))
+		maps.Copy(target.Attributes, mu.Metadata.Attributes)
 		modified = true
 	}
 

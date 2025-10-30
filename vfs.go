@@ -11,7 +11,6 @@ import (
 	"github.com/mwantia/vfs/data/errors"
 	"github.com/mwantia/vfs/log"
 	"github.com/mwantia/vfs/mount"
-	"github.com/mwantia/vfs/mount/backend/memory"
 )
 
 // virtualFileSystemImpl is the main VFS manager that handles mount points and delegates
@@ -40,18 +39,6 @@ func NewVirtualFileSystem(opts ...VirtualFileSystemOption) (VirtualFileSystem, e
 	}
 
 	vfs.log.Info("VFS initialized with log level: %s", options.LogLevel)
-
-	// Create base root mount if enabled
-	if options.BaseRootMount {
-		vfs.log.Info("Creating base root mount at /")
-		ctx := context.Background()
-		root := memory.NewMemoryBackend()
-		if err := vfs.Mount(ctx, "/", root, mount.AsReadOnly()); err != nil {
-			vfs.log.Error("Failed to create base root mount: %v", err)
-			return nil, err
-		}
-		vfs.log.Info("Base root mount created successfully")
-	}
 
 	if err := vfs.initBuiltinCommands(); err != nil {
 		return nil, err
@@ -129,7 +116,7 @@ func (vfs *virtualFileSystemImpl) initBuiltinCommands() error {
 }
 
 // renameFile performs a copy-and-delete rename for a single file.
-func (vfs *virtualFileSystemImpl) renameFile(ctx context.Context, oldPath string, newPath string, oldStat *data.VirtualFileMetadata) error {
+func (vfs *virtualFileSystemImpl) renameFile(ctx context.Context, oldPath string, newPath string, oldStat *data.Metadata) error {
 	// Handle empty files specially
 	if oldStat.Size == 0 {
 		vfs.log.Debug("renameFile: creating empty file at %s", newPath)

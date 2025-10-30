@@ -6,8 +6,8 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 )
 
-type VirtualAclBackend interface {
-	backend.VirtualBackend
+type AclBackendExtension interface {
+	backend.Backend
 
 	GetAclPermission(ctx context.Context, path string) (*AclPermission, error)
 

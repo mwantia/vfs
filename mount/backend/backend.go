@@ -2,8 +2,8 @@ package backend
 
 import "context"
 
-// VirtualBackend is used as lifecycle entrypoint for other backend implementations.
-type VirtualBackend interface {
+// Backend is used as lifecycle entrypoint for other backend implementations.
+type Backend interface {
 	// Name returns the identifier name defined for this backend
 	Name() string
 	// Open is part of the lifecycle behavious and gets called when opening this backend.
@@ -12,5 +12,5 @@ type VirtualBackend interface {
 	Close(ctx context.Context) error
 
 	// GetCapabilities returns a list of capabilities supported by this backend.
-	GetCapabilities() *VirtualBackendCapabilities
+	GetCapabilities() *BackendCapabilities
 }

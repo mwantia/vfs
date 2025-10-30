@@ -5,19 +5,19 @@ import (
 	"time"
 )
 
-type VirtualFileType string
+type FileType string
 
 const (
-	FileTypeDir       VirtualFileType = "directory"
-	FileTypeSymlink   VirtualFileType = "symlink"
-	FileTypeNamedPipe VirtualFileType = "namedpipe"
-	FileTypeSocket    VirtualFileType = "socket"
-	FileTypeDevice    VirtualFileType = "device"
-	FileTypeRegular   VirtualFileType = "regular"
+	FileTypeDir       FileType = "directory"
+	FileTypeSymlink   FileType = "symlink"
+	FileTypeNamedPipe FileType = "namedpipe"
+	FileTypeSocket    FileType = "socket"
+	FileTypeDevice    FileType = "device"
+	FileTypeRegular   FileType = "regular"
 )
 
-// VirtualFileMetadata represents the core metadata structure.
-type VirtualFileMetadata struct {
+// Metadata represents the core metadata structure.
+type Metadata struct {
 	// Unique identifier for metadata lookup
 	ID string `json:"id"`
 
@@ -26,7 +26,7 @@ type VirtualFileMetadata struct {
 
 	// Unix-style mode and permissions
 	// Also used as type of object (file, directory, etc.)
-	Mode VirtualFileMode `json:"mode"`
+	Mode FileMode `json:"mode"`
 
 	// Size in bytes (0 for directories)
 	Size int64 `json:"size"`
@@ -42,7 +42,7 @@ type VirtualFileMetadata struct {
 	GID int64 `json:"gid,omitempty"`
 
 	// Content MIME type
-	ContentType string `json:"content_type"`
+	ContentType ContentType `json:"content_type"`
 
 	// Extended attributes (mount-specific)
 	Attributes map[string]string `json:"attributes,omitempty"`
@@ -50,41 +50,41 @@ type VirtualFileMetadata struct {
 	ETag string `json:"etag"`
 }
 
-// Marshal provides JSON serialization for VirtualInode.
-func (vfm *VirtualFileMetadata) Marshal() ([]byte, error) {
-	return json.Marshal(vfm)
+// Marshal provides JSON serialization for Inode.
+func (m *Metadata) Marshal() ([]byte, error) {
+	return json.Marshal(m)
 }
 
-// Unmarshal provides JSON deserialization for VirtualInode.
-func (vfm *VirtualFileMetadata) Unmarshal(data []byte) error {
-	return json.Unmarshal(data, &vfm)
+// Unmarshal provides JSON deserialization for Inode.
+func (m *Metadata) Unmarshal(data []byte) error {
+	return json.Unmarshal(data, &m)
 }
 
-// ToStat converts VirtualFileMetadata into a low-level VirtualFileStat.
-func (vfm *VirtualFileMetadata) ToStat() *VirtualFileStat {
-	return &VirtualFileStat{
-		Key:         vfm.Key,
-		Mode:        vfm.Mode,
-		Size:        vfm.Size,
-		ModifyTime:  vfm.ModifyTime,
-		CreateTime:  vfm.CreateTime,
-		ContentType: vfm.ContentType,
-		ETag:        vfm.ETag,
+// ToStat converts FileMetadata into a low-level FileStat.
+func (m *Metadata) ToStat() *FileStat {
+	return &FileStat{
+		Key:         m.Key,
+		Mode:        m.Mode,
+		Size:        m.Size,
+		ModifyTime:  m.ModifyTime,
+		CreateTime:  m.CreateTime,
+		ContentType: m.ContentType,
+		ETag:        m.ETag,
 	}
 }
 
 // GetType returns the filetype defined to this metadata
-func (vfm *VirtualFileMetadata) GetType() VirtualFileType {
+func (m *Metadata) GetType() FileType {
 	switch {
-	case vfm.Mode.IsDir():
+	case m.Mode.IsDir():
 		return FileTypeDir
-	case vfm.Mode.IsSymlink():
+	case m.Mode.IsSymlink():
 		return FileTypeSymlink
-	case vfm.Mode.IsNamedPipe():
+	case m.Mode.IsNamedPipe():
 		return FileTypeNamedPipe
-	case vfm.Mode.IsSocket():
+	case m.Mode.IsSocket():
 		return FileTypeSocket
-	case vfm.Mode.IsDevice():
+	case m.Mode.IsDevice():
 		return FileTypeDevice
 	default:
 		return FileTypeRegular
@@ -92,7 +92,7 @@ func (vfm *VirtualFileMetadata) GetType() VirtualFileType {
 }
 
 // Clone creates a deep copy of the object info.
-func (vfm *VirtualFileMetadata) Clone() *VirtualFileMetadata {
-	clone := *vfm
+func (m *Metadata) Clone() *Metadata {
+	clone := *m
 	return &clone
 }

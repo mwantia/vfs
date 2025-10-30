@@ -11,11 +11,13 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-// Directory marker - directories are stored with this special value
-const dirMarker = "__DIR__"
+// Namespace returns the identifier used as namespace
+func (_ *ConsulBackend) Namespace() string {
+	return ""
+}
 
 // CreateObject creates a new object (file or directory)
-func (cb *ConsulBackend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
+func (cb *ConsulBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
@@ -35,44 +37,51 @@ func (cb *ConsulBackend) CreateObject(ctx context.Context, key string, mode data
 		parentKey := path.Dir(key)
 		if parentKey != "." && parentKey != "" && parentKey != "/" {
 			parentConsulKey := cb.buildKey(parentKey)
-			parent, _, err := cb.kv.Get(parentConsulKey, nil)
 
-			// If parent exists as a key
+			// Check if parent is a file (files block directory creation)
+			parent, _, err := cb.kv.Get(parentConsulKey, nil)
 			if err == nil && parent != nil {
-				// Check if parent is a directory
-				if string(parent.Value) != dirMarker {
-					return nil, data.ErrNotDirectory
-				}
-			} else {
-				// Parent doesn't exist as a key - check if it's a virtual directory
-				prefix := parentConsulKey
-				if prefix[len(prefix)-1] != '/' {
-					prefix += "/"
-				}
-				keys, _, err := cb.kv.Keys(prefix, "", nil)
-				if err != nil {
-					return nil, err
-				}
-				if len(keys) == 0 {
-					// No children, so parent doesn't exist
-					return nil, data.ErrNotExist
-				}
-				// Parent is a virtual directory - allow creation
+				// Parent exists as a key (file), can't create child
+				return nil, data.ErrNotDirectory
 			}
+
+			// Parent doesn't exist as a key - check if it's a virtual directory
+			prefix := parentConsulKey
+			if prefix[len(prefix)-1] != '/' {
+				prefix += "/"
+			}
+			keys, _, err := cb.kv.Keys(prefix, "", nil)
+			if err != nil {
+				return nil, err
+			}
+			if len(keys) == 0 {
+				// No children, so parent doesn't exist
+				return nil, data.ErrNotExist
+			}
+			// Parent is a virtual directory - allow creation
 		}
 	}
 
 	// Create the object
-	var value []byte
+	// For directories: don't create a key, they're virtual (exist as prefixes only)
+	// For files: create a key with empty or actual data
 	if mode.IsDir() {
-		value = []byte(dirMarker)
-	} else {
-		value = []byte{} // Empty file
+		// Directories are virtual in Consul - don't create a key
+		// Just return success
+		now := time.Now()
+		return &data.FileStat{
+			Key:        key,
+			Mode:       mode,
+			Size:       0,
+			CreateTime: now,
+			ModifyTime: now,
+		}, nil
 	}
 
+	// Create file
 	pair = &api.KVPair{
 		Key:   consulKey,
-		Value: value,
+		Value: []byte{}, // Empty file
 	}
 
 	if _, err := cb.kv.Put(pair, nil); err != nil {
@@ -80,7 +89,7 @@ func (cb *ConsulBackend) CreateObject(ctx context.Context, key string, mode data
 	}
 
 	now := time.Now()
-	return &data.VirtualFileStat{
+	return &data.FileStat{
 		Key:        key,
 		Mode:       mode,
 		Size:       0,
@@ -100,13 +109,19 @@ func (cb *ConsulBackend) ReadObject(ctx context.Context, key string, offset int6
 		return 0, err
 	}
 	if pair == nil {
+		// Check if it's a virtual directory
+		prefix := consulKey + "/"
+		keys, _, err := cb.kv.Keys(prefix, "", nil)
+		if err != nil {
+			return 0, err
+		}
+		if len(keys) > 0 {
+			return 0, data.ErrIsDirectory
+		}
 		return 0, data.ErrNotExist
 	}
 
-	// Check if it's a directory
-	if string(pair.Value) == dirMarker {
-		return 0, data.ErrIsDirectory
-	}
+	// Key exists, so it's a file (directories are virtual and don't have keys)
 
 	size := int64(len(pair.Value))
 	if offset >= size {
@@ -133,13 +148,19 @@ func (cb *ConsulBackend) WriteObject(ctx context.Context, key string, offset int
 		return 0, err
 	}
 	if pair == nil {
+		// Check if it's a virtual directory
+		prefix := consulKey + "/"
+		keys, _, err := cb.kv.Keys(prefix, "", nil)
+		if err != nil {
+			return 0, err
+		}
+		if len(keys) > 0 {
+			return 0, data.ErrIsDirectory
+		}
 		return 0, data.ErrNotExist
 	}
 
-	// Check if it's a directory
-	if string(pair.Value) == dirMarker {
-		return 0, data.ErrIsDirectory
-	}
+	// Key exists, so it's a file (directories are virtual and don't have keys)
 
 	writeEnd := offset + int64(len(dat))
 
@@ -179,40 +200,40 @@ func (cb *ConsulBackend) DeleteObject(ctx context.Context, key string, force boo
 	if err != nil {
 		return err
 	}
+
+	// Check if it's a virtual directory
+	prefix := consulKey + "/"
+	keys, _, err := cb.kv.Keys(prefix, "", nil)
+	if err != nil {
+		return err
+	}
+
+	isDir := len(keys) > 0
+
+	if isDir {
+		// It's a directory (virtual)
+		if !force {
+			// Non-recursive delete on non-empty directory should fail
+			return data.ErrIsDirectory
+		}
+		// Delete all children recursively using DeleteTree
+		if _, err := cb.kv.DeleteTree(prefix, nil); err != nil {
+			return err
+		}
+		// If there was an explicit key (shouldn't happen for virtual dirs), delete it too
+		if pair != nil {
+			if _, err := cb.kv.Delete(consulKey, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// It's a file - delete the key
 	if pair == nil {
 		return data.ErrNotExist
 	}
 
-	isDir := string(pair.Value) == dirMarker
-
-	if isDir {
-		// For directories, check if we need to delete recursively
-		if !force {
-			// Check if directory has children
-			prefix := consulKey
-			if prefix[len(prefix)-1] != '/' {
-				prefix += "/"
-			}
-			keys, _, err := cb.kv.Keys(prefix, "", nil)
-			if err != nil {
-				return err
-			}
-			if len(keys) > 0 {
-				return data.ErrIsDirectory
-			}
-		} else {
-			// Delete all children recursively using DeleteTree
-			prefix := consulKey
-			if prefix[len(prefix)-1] != '/' {
-				prefix += "/"
-			}
-			if _, err := cb.kv.DeleteTree(prefix, nil); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Delete the object itself
 	if _, err := cb.kv.Delete(consulKey, nil); err != nil {
 		return err
 	}
@@ -221,7 +242,7 @@ func (cb *ConsulBackend) DeleteObject(ctx context.Context, key string, force boo
 }
 
 // ListObjects lists all objects under a given key (directory)
-func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.VirtualFileStat, error) {
+func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 
@@ -231,18 +252,14 @@ func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 		pair, _, err := cb.kv.Get(consulKey, nil)
 
 		if err == nil && pair != nil {
-			// Key exists - check if it's a file
-			if string(pair.Value) != dirMarker {
-				// It's a file, return just this file
-				return []*data.VirtualFileStat{{
-					Key:        key,
-					Mode:       0644,
-					Size:       int64(len(pair.Value)),
-					CreateTime: time.Unix(0, int64(pair.CreateIndex)),
-					ModifyTime: time.Unix(0, int64(pair.ModifyIndex)),
-				}}, nil
-			}
-			// It's a directory marker - continue to list children
+			// Key exists - it's a file (directories are virtual and don't have keys)
+			return []*data.FileStat{{
+				Key:        key,
+				Mode:       0644,
+				Size:       int64(len(pair.Value)),
+				CreateTime: time.Unix(0, int64(pair.CreateIndex)),
+				ModifyTime: time.Unix(0, int64(pair.ModifyIndex)),
+			}}, nil
 		}
 		// Key doesn't exist - might be virtual directory, check below
 	}
@@ -268,7 +285,7 @@ func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	}
 
 	// Build result list
-	result := make([]*data.VirtualFileStat, 0, len(consulKeys))
+	result := make([]*data.FileStat, 0, len(consulKeys))
 
 	for _, consulKey := range consulKeys {
 		// Check if this is a virtual directory (Consul adds trailing / for prefixes)
@@ -298,7 +315,7 @@ func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 
 		if hasTrailingSlash {
 			// Virtual directory - no actual key, just a prefix
-			result = append(result, &data.VirtualFileStat{
+			result = append(result, &data.FileStat{
 				Key:        relKey,
 				Mode:       0755 | data.ModeDir,
 				Size:       0,
@@ -306,27 +323,16 @@ func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 				ModifyTime: time.Now(),
 			})
 		} else {
-			// Real key - fetch metadata
+			// Real key - it's a file (directories are virtual and don't have keys)
 			pair, _, err := cb.kv.Get(consulKey, nil)
 			if err != nil || pair == nil {
 				continue
 			}
 
-			var mode data.VirtualFileMode
-			var size int64
-
-			if string(pair.Value) == dirMarker {
-				mode = 0755 | data.ModeDir
-				size = 0
-			} else {
-				mode = 0644
-				size = int64(len(pair.Value))
-			}
-
-			result = append(result, &data.VirtualFileStat{
+			result = append(result, &data.FileStat{
 				Key:        relKey,
-				Mode:       mode,
-				Size:       size,
+				Mode:       0644,
+				Size:       int64(len(pair.Value)),
 				CreateTime: time.Unix(0, int64(pair.CreateIndex)),
 				ModifyTime: time.Unix(0, int64(pair.ModifyIndex)),
 			})
@@ -337,30 +343,19 @@ func (cb *ConsulBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 }
 
 // HeadObject returns metadata about an object
-func (cb *ConsulBackend) HeadObject(ctx context.Context, key string) (*data.VirtualFileStat, error) {
+func (cb *ConsulBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 
 	consulKey := cb.buildKey(key)
 	pair, _, err := cb.kv.Get(consulKey, nil)
 
-	// If key exists, return its metadata
+	// If key exists, it's a file (directories are virtual and don't have keys)
 	if err == nil && pair != nil {
-		var mode data.VirtualFileMode
-		var size int64
-
-		if string(pair.Value) == dirMarker {
-			mode = 0755 | data.ModeDir
-			size = 0
-		} else {
-			mode = 0644
-			size = int64(len(pair.Value))
-		}
-
-		return &data.VirtualFileStat{
+		return &data.FileStat{
 			Key:        key,
-			Mode:       mode,
-			Size:       size,
+			Mode:       0644,
+			Size:       int64(len(pair.Value)),
 			CreateTime: time.Unix(0, int64(pair.CreateIndex)),
 			ModifyTime: time.Unix(0, int64(pair.ModifyIndex)),
 		}, nil
@@ -377,7 +372,7 @@ func (cb *ConsulBackend) HeadObject(ctx context.Context, key string) (*data.Virt
 	}
 	if len(keys) > 0 {
 		// It's a virtual directory (has children but no actual key)
-		return &data.VirtualFileStat{
+		return &data.FileStat{
 			Key:        key,
 			Mode:       0755 | data.ModeDir,
 			Size:       0,
@@ -401,13 +396,19 @@ func (cb *ConsulBackend) TruncateObject(ctx context.Context, key string, size in
 		return err
 	}
 	if pair == nil {
+		// Check if it's a virtual directory
+		prefix := consulKey + "/"
+		keys, _, err := cb.kv.Keys(prefix, "", nil)
+		if err != nil {
+			return err
+		}
+		if len(keys) > 0 {
+			return data.ErrIsDirectory
+		}
 		return data.ErrNotExist
 	}
 
-	// Check if it's a directory
-	if string(pair.Value) == dirMarker {
-		return data.ErrIsDirectory
-	}
+	// Key exists, so it's a file (directories are virtual and don't have keys)
 
 	currentSize := int64(len(pair.Value))
 	if size == currentSize {

@@ -6,10 +6,12 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-type VirtualObjectStorageBackend interface {
-	VirtualBackend
+type ObjectStorageBackend interface {
+	Backend
 
-	CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error)
+	Namespace() string
+
+	CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error)
 
 	ReadObject(ctx context.Context, key string, offset int64, data []byte) (int, error)
 
@@ -17,9 +19,9 @@ type VirtualObjectStorageBackend interface {
 
 	DeleteObject(ctx context.Context, key string, force bool) error
 
-	ListObjects(ctx context.Context, key string) ([]*data.VirtualFileStat, error)
+	ListObjects(ctx context.Context, key string) ([]*data.FileStat, error)
 
-	HeadObject(ctx context.Context, key string) (*data.VirtualFileStat, error)
+	HeadObject(ctx context.Context, key string) (*data.FileStat, error)
 
 	TruncateObject(ctx context.Context, key string, size int64) error
 }

@@ -12,7 +12,12 @@ import (
 	"github.com/mwantia/vfs/data/errors"
 )
 
-func (sb *SQLiteBackend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
+// Namespace returns the identifier used as namespace
+func (_ *SQLiteBackend) Namespace() string {
+	return ""
+}
+
+func (sb *SQLiteBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -218,7 +223,7 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, key string, force boo
 	return sb.DeleteMeta(ctx, key)
 }
 
-func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.VirtualFileStat, error) {
+func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
@@ -231,7 +236,7 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 
 		// For files, return single entry
 		if !meta.Mode.IsDir() {
-			return []*data.VirtualFileStat{
+			return []*data.FileStat{
 				meta.ToStat(),
 			}, nil
 		}
@@ -245,7 +250,7 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	prefixLen := len(prefixKey)
 
 	// Use map to deduplicate direct children
-	children := make(map[string]*data.VirtualFileMetadata)
+	children := make(map[string]*data.Metadata)
 
 	// B-tree range scan: iterate over all paths starting with prefix
 	sb.keys.Scan(func(childPath string, childID string) bool {
@@ -291,7 +296,7 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	})
 
 	// Convert map to slice
-	result := make([]*data.VirtualFileStat, 0, len(children))
+	result := make([]*data.FileStat, 0, len(children))
 	for _, childMeta := range children {
 		stat := childMeta.ToStat()
 		result = append(result, stat)
@@ -300,7 +305,7 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	return result, nil
 }
 
-func (sb *SQLiteBackend) HeadObject(ctx context.Context, key string) (*data.VirtualFileStat, error) {
+func (sb *SQLiteBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 

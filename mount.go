@@ -13,7 +13,7 @@ import (
 
 // Mount attaches a filesystem handler at the specified path.
 // Options can be used to configure the mount (e.g., read-only).
-func (vfs *virtualFileSystemImpl) Mount(ctx context.Context, path string, primary backend.VirtualObjectStorageBackend, opts ...mount.MountOption) error {
+func (vfs *virtualFileSystemImpl) Mount(ctx context.Context, path string, primary backend.ObjectStorageBackend, opts ...mount.MountOption) error {
 	// Always start with an absolute path
 	absolute, err := data.ToAbsolutePath(path)
 	if err != nil {

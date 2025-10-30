@@ -12,7 +12,7 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 )
 
-func (pb *PostgresBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileMetadata) error {
+func (pb *PostgresBackend) CreateMeta(ctx context.Context, meta *data.Metadata) error {
 	// Check if key already exists in B-tree
 	if _, exists := pb.keys.Get(meta.Key); exists {
 		return data.ErrExist
@@ -46,6 +46,7 @@ func (pb *PostgresBackend) CreateMeta(ctx context.Context, meta *data.VirtualFil
 	}
 	defer conn.Release()
 
+	contentType := string(meta.ContentType)
 	// Insert into database
 	_, err = conn.Exec(ctx, `
 		INSERT INTO vfs_metadata (id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
@@ -53,7 +54,7 @@ func (pb *PostgresBackend) CreateMeta(ctx context.Context, meta *data.VirtualFil
 	`, meta.ID, meta.Key, int(meta.Mode), meta.Size,
 		nullInt64(meta.UID), nullInt64(meta.GID),
 		meta.ModifyTime.Unix(), meta.AccessTime.Unix(), meta.CreateTime.Unix(),
-		nullString(meta.ContentType), nullString(meta.ETag), attributesJSON)
+		nullString(contentType), nullString(meta.ETag), attributesJSON)
 
 	if err != nil {
 		return fmt.Errorf("failed to insert metadata: %w", err)
@@ -64,7 +65,7 @@ func (pb *PostgresBackend) CreateMeta(ctx context.Context, meta *data.VirtualFil
 	return nil
 }
 
-func (pb *PostgresBackend) ReadMeta(ctx context.Context, key string) (*data.VirtualFileMetadata, error) {
+func (pb *PostgresBackend) ReadMeta(ctx context.Context, key string) (*data.Metadata, error) {
 	// Check B-tree first
 	id, exists := pb.keys.Get(key)
 	if !exists {
@@ -78,7 +79,7 @@ func (pb *PostgresBackend) ReadMeta(ctx context.Context, key string) (*data.Virt
 	defer conn.Release()
 
 	// Query database
-	var meta data.VirtualFileMetadata
+	var meta data.Metadata
 	var uid, gid *int64
 	var contentType, etag *string
 	var attributesJSON []byte
@@ -111,7 +112,7 @@ func (pb *PostgresBackend) ReadMeta(ctx context.Context, key string) (*data.Virt
 		meta.GID = *gid
 	}
 	if contentType != nil {
-		meta.ContentType = *contentType
+		meta.ContentType = data.ContentType(*contentType)
 	}
 	if etag != nil {
 		meta.ETag = *etag
@@ -132,7 +133,7 @@ func (pb *PostgresBackend) ReadMeta(ctx context.Context, key string) (*data.Virt
 	return &meta, nil
 }
 
-func (pb *PostgresBackend) UpdateMeta(ctx context.Context, key string, update *data.VirtualFileMetadataUpdate) error {
+func (pb *PostgresBackend) UpdateMeta(ctx context.Context, key string, update *data.MetadataUpdate) error {
 	// Check if key exists
 	id, exists := pb.keys.Get(key)
 	if !exists {
@@ -166,6 +167,7 @@ func (pb *PostgresBackend) UpdateMeta(ctx context.Context, key string, update *d
 	}
 	defer conn.Release()
 
+	contentType := string(meta.ContentType)
 	// Update database
 	_, err = conn.Exec(ctx, `
 		UPDATE vfs_metadata
@@ -175,7 +177,7 @@ func (pb *PostgresBackend) UpdateMeta(ctx context.Context, key string, update *d
 	`, int(meta.Mode), meta.Size,
 		nullInt64(meta.UID), nullInt64(meta.GID),
 		meta.ModifyTime.Unix(), meta.AccessTime.Unix(),
-		nullString(meta.ContentType), nullString(meta.ETag), attributesJSON, id)
+		nullString(contentType), nullString(meta.ETag), attributesJSON, id)
 
 	if err != nil {
 		return fmt.Errorf("failed to update metadata: %w", err)
@@ -340,9 +342,9 @@ func (pb *PostgresBackend) QueryMeta(ctx context.Context, query *backend.Metadat
 	defer rows.Close()
 
 	// Process results
-	results := make([]*data.VirtualFileMetadata, 0)
+	results := make([]*data.Metadata, 0)
 	for rows.Next() {
-		var meta data.VirtualFileMetadata
+		var meta data.Metadata
 		var uid, gid *int64
 		var contentType, etag *string
 		var attributesJSON []byte
@@ -368,7 +370,7 @@ func (pb *PostgresBackend) QueryMeta(ctx context.Context, query *backend.Metadat
 			meta.GID = *gid
 		}
 		if contentType != nil {
-			meta.ContentType = *contentType
+			meta.ContentType = data.ContentType(*contentType)
 		}
 		if etag != nil {
 			meta.ETag = *etag

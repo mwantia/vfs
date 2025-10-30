@@ -17,18 +17,18 @@ import (
 )
 
 // TestBackendFactory creates a new backend instance for testing.
-type TestBackendFactory func(t *testing.T) (backend.VirtualObjectStorageBackend, error)
+type TestBackendFactory func(t *testing.T) (backend.ObjectStorageBackend, error)
 
 // GetTestBackendFactories returns all backend implementations to test.
 func GetTestBackendFactories() map[string]TestBackendFactory {
 	factories := map[string]TestBackendFactory{
-		"memory": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
+		"memory": func(t *testing.T) (backend.ObjectStorageBackend, error) {
 			return memory.NewMemoryBackend(), nil
 		},
-		"sqlite": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
+		"sqlite": func(t *testing.T) (backend.ObjectStorageBackend, error) {
 			return sqlite.NewSQLiteBackend(":memory:")
 		},
-		"local": func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
+		"local": func(t *testing.T) (backend.ObjectStorageBackend, error) {
 			return local.NewLocalBackend(t.TempDir()), nil
 		},
 	}
@@ -36,7 +36,7 @@ func GetTestBackendFactories() map[string]TestBackendFactory {
 	// Add Postgres backend if connection string is provided via environment variable
 	// Example: export VFS_TEST_POSTGRES="postgres://user:pass@localhost:5432/vfs_test"
 	if connStr := os.Getenv("VFS_TEST_POSTGRES"); connStr != "" {
-		factories["postgres"] = func(t *testing.T) (backend.VirtualObjectStorageBackend, error) {
+		factories["postgres"] = func(t *testing.T) (backend.ObjectStorageBackend, error) {
 			return postgres.NewPostgresBackend(connStr)
 		}
 	}

@@ -12,7 +12,12 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-func (lb *LocalBackend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
+// Namespace returns the identifier used as namespace
+func (_ *LocalBackend) Namespace() string {
+	return ""
+}
+
+func (lb *LocalBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -33,7 +38,7 @@ func (lb *LocalBackend) CreateObject(ctx context.Context, key string, mode data.
 
 	now := time.Now()
 
-	return &data.VirtualFileStat{
+	return &data.FileStat{
 		Key:  key,
 		Mode: mode,
 		Size: 0,
@@ -130,7 +135,7 @@ func (lb *LocalBackend) DeleteObject(ctx context.Context, key string, force bool
 	return os.Remove(fullPath)
 }
 
-func (lb *LocalBackend) ListObjects(ctx context.Context, key string) ([]*data.VirtualFileStat, error) {
+func (lb *LocalBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
@@ -148,8 +153,8 @@ func (lb *LocalBackend) ListObjects(ctx context.Context, key string) ([]*data.Vi
 	}
 
 	if !info.IsDir() {
-		return []*data.VirtualFileStat{
-			lb.toVirtualFileStat(key, info),
+		return []*data.FileStat{
+			lb.toFileStat(key, info),
 		}, nil
 	}
 
@@ -158,7 +163,7 @@ func (lb *LocalBackend) ListObjects(ctx context.Context, key string) ([]*data.Vi
 		return nil, err
 	}
 
-	stats := make([]*data.VirtualFileStat, 0, len(entries))
+	stats := make([]*data.FileStat, 0, len(entries))
 	for _, entry := range entries {
 		childInfo, err := entry.Info()
 		if err != nil {
@@ -166,13 +171,13 @@ func (lb *LocalBackend) ListObjects(ctx context.Context, key string) ([]*data.Vi
 		}
 
 		childKey := filepath.Join(key, entry.Name())
-		stats = append(stats, lb.toVirtualFileStat(childKey, childInfo))
+		stats = append(stats, lb.toFileStat(childKey, childInfo))
 	}
 
 	return stats, nil
 }
 
-func (lb *LocalBackend) HeadObject(ctx context.Context, key string) (*data.VirtualFileStat, error) {
+func (lb *LocalBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
@@ -190,7 +195,7 @@ func (lb *LocalBackend) HeadObject(ctx context.Context, key string) (*data.Virtu
 		return nil, err
 	}
 
-	return lb.toVirtualFileStat(key, info), nil
+	return lb.toFileStat(key, info), nil
 }
 
 func (lb *LocalBackend) TruncateObject(ctx context.Context, key string, size int64) error {

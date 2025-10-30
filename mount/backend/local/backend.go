@@ -61,9 +61,9 @@ func (lb *LocalBackend) Close(ctx context.Context) error {
 }
 
 // GetCapabilities returns a list of capabilities supported by this backend.
-func (lb *LocalBackend) GetCapabilities() *backend.VirtualBackendCapabilities {
-	return &backend.VirtualBackendCapabilities{
-		Capabilities: []backend.VirtualBackendCapability{
+func (lb *LocalBackend) GetCapabilities() *backend.BackendCapabilities {
+	return &backend.BackendCapabilities{
+		Capabilities: []backend.BackendCapability{
 			backend.CapabilityObjectStorage,
 		},
 		// Local filesystem limits vary by OS/filesystem, but we set a practical limit
@@ -78,13 +78,13 @@ func (lb *LocalBackend) resolvePath(path string) string {
 }
 
 // toVirtualFileStat converts os.FileInfo to a VirtualFileStat.
-func (lb *LocalBackend) toVirtualFileStat(key string, fileInfo os.FileInfo) *data.VirtualFileStat {
-	virtMode := data.VirtualFileMode(fileInfo.Mode().Perm())
+func (lb *LocalBackend) toFileStat(key string, fileInfo os.FileInfo) *data.FileStat {
+	virtMode := data.FileMode(fileInfo.Mode().Perm())
 	if fileInfo.IsDir() {
 		virtMode |= data.ModeDir
 	}
 
-	return &data.VirtualFileStat{
+	return &data.FileStat{
 		Key:  key,
 		Size: fileInfo.Size(),
 		Mode: virtMode,

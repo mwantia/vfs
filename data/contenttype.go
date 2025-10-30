@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-type VirtualFileContentType string
+type ContentType string
 
 const (
 	ContentTypeTextPlain         = "text/plain"
@@ -36,7 +36,7 @@ const (
 )
 
 // ExtensionToMIME maps file extensions to MIME types
-var ExtensionToMIME = map[string]string{
+var ExtensionToMIME = map[string]ContentType{
 	".txt":  ContentTypeTextPlain,
 	".html": ContentTypeTextHTML,
 	".css":  ContentTypeTextCSS,
@@ -62,7 +62,7 @@ var ExtensionToMIME = map[string]string{
 }
 
 // MIMEToExtension is the reverse mapping (first/primary extension only)
-var MIMEToExtension = map[string]string{
+var MIMEToExtension = map[ContentType]string{
 	ContentTypeTextPlain:       ".txt",
 	ContentTypeTextHTML:        ".html",
 	ContentTypeTextCSS:         ".css",
@@ -87,7 +87,7 @@ var MIMEToExtension = map[string]string{
 }
 
 // GetMIMEType returns the MIME type for a file extension
-func GetMIMEType(path string) string {
+func GetMIMEType(path string) ContentType {
 	// Extract extension
 	ext := strings.ToLower(filepath.Ext(path))
 
@@ -100,10 +100,7 @@ func GetMIMEType(path string) string {
 }
 
 // GetExtension returns the primary extension for a MIME type
-func GetExtension(mimeType string) string {
-	// Normalize MIME type (remove charset, etc.)
-	mimeType = strings.ToLower(strings.Split(mimeType, ";")[0])
-
+func GetExtension(mimeType ContentType) string {
 	if ext, exists := MIMEToExtension[mimeType]; exists {
 		return ext
 	}

@@ -12,7 +12,7 @@ import (
 )
 
 type MountOptions struct {
-	Backends map[backend.VirtualBackendCapability]backend.VirtualBackend
+	Backends map[backend.BackendCapability]backend.Backend
 
 	Auto        bool //
 	CacheReads  bool // Cache file reads
@@ -25,8 +25,8 @@ type MountOption func(*MountOptions) error
 
 func newDefaultMountOptions() *MountOptions {
 	return &MountOptions{
-		Backends:    make(map[backend.VirtualBackendCapability]backend.VirtualBackend),
-		Auto:        true,
+		Backends:    make(map[backend.BackendCapability]backend.Backend),
+		Auto:        false,
 		CacheReads:  false,
 		CacheWrites: false,
 		ReadOnly:    false,
@@ -34,56 +34,56 @@ func newDefaultMountOptions() *MountOptions {
 	}
 }
 
-func WithACL(ext acl.VirtualAclBackend) MountOption {
+func WithACL(ext acl.AclBackendExtension) MountOption {
 	return func(vmo *MountOptions) error {
 		vmo.Backends[backend.CapabilityACL] = ext
 		return nil
 	}
 }
 
-func WithCache(ext cache.VirtualCacheBackend) MountOption {
+func WithCache(ext cache.CacheBackendExtension) MountOption {
 	return func(vmo *MountOptions) error {
 		vmo.Backends[backend.CapabilityCache] = ext
 		return nil
 	}
 }
 
-func WithEncrypt(ext encrypt.VirtualEncryptBackend) MountOption {
+func WithEncrypt(ext encrypt.EncryptBackendExtension) MountOption {
 	return func(vmo *MountOptions) error {
 		vmo.Backends[backend.CapabilityEncrypt] = ext
 		return nil
 	}
 }
 
-func WithMetadata(ext backend.VirtualMetadataBackend) MountOption {
+func WithMetadata(ext backend.MetadataBackend) MountOption {
 	return func(vmo *MountOptions) error {
 		vmo.Backends[backend.CapabilityMetadata] = ext
 		return nil
 	}
 }
 
-func WithMultipart(ext multipart.VirtualMultipartBackend) MountOption {
+func WithMultipart(ext multipart.MultipartBackendExtension) MountOption {
 	return func(vmo *MountOptions) error {
 		vmo.Backends[backend.CapabilityMultipart] = ext
 		return nil
 	}
 }
 
-func WithRubbish(ext rubbish.VirtualRubbishBackend) MountOption {
+func WithRubbish(ext rubbish.RubbishBackendExtension) MountOption {
 	return func(vmo *MountOptions) error {
 		vmo.Backends[backend.CapabilityRubbish] = ext
 		return nil
 	}
 }
 
-func WithSnapshot(ext snapshot.VirtualSnapshotBackend) MountOption {
+func WithSnapshot(ext snapshot.SnapshotBackendExtension) MountOption {
 	return func(vmo *MountOptions) error {
 		vmo.Backends[backend.CapabilitySnapshot] = ext
 		return nil
 	}
 }
 
-func WithVersioning(ext versioning.VirtualVersioningBackend) MountOption {
+func WithVersioning(ext versioning.VersioningBackendExtension) MountOption {
 	return func(vmo *MountOptions) error {
 		vmo.Backends[backend.CapabilityVersioning] = ext
 		return nil

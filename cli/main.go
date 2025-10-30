@@ -65,7 +65,7 @@ func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := fs.Mount(ctx, "/consul", consul, mount.AsReadOnly(), mount.DisableAuto()); err != nil {
+		if err := fs.Mount(ctx, "/consul", consul, mount.DisableAuto()); err != nil {
 			return nil, fmt.Errorf("failed to mount: %w", err)
 		}
 	}

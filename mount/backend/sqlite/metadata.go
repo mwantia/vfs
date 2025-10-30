@@ -12,7 +12,7 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 )
 
-func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileMetadata) error {
+func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.Metadata) error {
 	// Check if key already exists in B-tree
 	if _, exists := sb.keys.Get(meta.Key); exists {
 		return data.ErrExist
@@ -40,6 +40,7 @@ func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileM
 		attributesJSON = sql.NullString{String: string(bytes), Valid: true}
 	}
 
+	contentType := string(meta.ContentType)
 	// Insert into database
 	_, err := sb.db.ExecContext(ctx, `
 		INSERT INTO vfs_metadata (id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
@@ -47,7 +48,7 @@ func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileM
 	`, meta.ID, meta.Key, int(meta.Mode), meta.Size,
 		nullInt64(meta.UID), nullInt64(meta.GID),
 		meta.ModifyTime.Unix(), meta.AccessTime.Unix(), meta.CreateTime.Unix(),
-		nullString(meta.ContentType), nullString(meta.ETag), attributesJSON)
+		nullString(contentType), nullString(meta.ETag), attributesJSON)
 
 	if err != nil {
 		return err
@@ -58,7 +59,7 @@ func (sb *SQLiteBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileM
 	return nil
 }
 
-func (sb *SQLiteBackend) ReadMeta(ctx context.Context, key string) (*data.VirtualFileMetadata, error) {
+func (sb *SQLiteBackend) ReadMeta(ctx context.Context, key string) (*data.Metadata, error) {
 	// Check B-tree first
 	id, exists := sb.keys.Get(key)
 	if !exists {
@@ -66,7 +67,7 @@ func (sb *SQLiteBackend) ReadMeta(ctx context.Context, key string) (*data.Virtua
 	}
 
 	// Query database
-	var meta data.VirtualFileMetadata
+	var meta data.Metadata
 	var uid, gid sql.NullInt64
 	var contentType, etag sql.NullString
 	var attributesJSON sql.NullString
@@ -99,7 +100,7 @@ func (sb *SQLiteBackend) ReadMeta(ctx context.Context, key string) (*data.Virtua
 		meta.GID = gid.Int64
 	}
 	if contentType.Valid {
-		meta.ContentType = contentType.String
+		meta.ContentType = data.ContentType(contentType.String)
 	}
 	if etag.Valid {
 		meta.ETag = etag.String
@@ -120,7 +121,7 @@ func (sb *SQLiteBackend) ReadMeta(ctx context.Context, key string) (*data.Virtua
 	return &meta, nil
 }
 
-func (sb *SQLiteBackend) UpdateMeta(ctx context.Context, key string, update *data.VirtualFileMetadataUpdate) error {
+func (sb *SQLiteBackend) UpdateMeta(ctx context.Context, key string, update *data.MetadataUpdate) error {
 	// Check if key exists
 	id, exists := sb.keys.Get(key)
 	if !exists {
@@ -149,6 +150,7 @@ func (sb *SQLiteBackend) UpdateMeta(ctx context.Context, key string, update *dat
 		attributesJSON = sql.NullString{String: string(bytes), Valid: true}
 	}
 
+	contentType := string(meta.ContentType)
 	// Update database
 	_, err = sb.db.ExecContext(ctx, `
 		UPDATE vfs_metadata
@@ -158,7 +160,7 @@ func (sb *SQLiteBackend) UpdateMeta(ctx context.Context, key string, update *dat
 	`, int(meta.Mode), meta.Size,
 		nullInt64(meta.UID), nullInt64(meta.GID),
 		meta.ModifyTime.Unix(), meta.AccessTime.Unix(),
-		nullString(meta.ContentType), nullString(meta.ETag), attributesJSON, id)
+		nullString(contentType), nullString(meta.ETag), attributesJSON, id)
 
 	return err
 }
@@ -296,9 +298,9 @@ func (sb *SQLiteBackend) QueryMeta(ctx context.Context, query *backend.MetadataQ
 	defer rows.Close()
 
 	// Process results
-	results := make([]*data.VirtualFileMetadata, 0)
+	results := make([]*data.Metadata, 0)
 	for rows.Next() {
-		var meta data.VirtualFileMetadata
+		var meta data.Metadata
 		var uid, gid sql.NullInt64
 		var contentType, etag sql.NullString
 		var attributesJSON sql.NullString
@@ -324,7 +326,7 @@ func (sb *SQLiteBackend) QueryMeta(ctx context.Context, query *backend.MetadataQ
 			meta.GID = gid.Int64
 		}
 		if contentType.Valid {
-			meta.ContentType = contentType.String
+			meta.ContentType = data.ContentType(contentType.String)
 		}
 		if etag.Valid {
 			meta.ETag = etag.String

@@ -91,7 +91,7 @@ func (ls *LsCommand) listPath(ctx context.Context, api cmd.API, path string, lon
 
 	// Filter hidden files if needed
 	if !showAll {
-		filtered := make([]*data.VirtualFileMetadata, 0, len(entries))
+		filtered := make([]*data.Metadata, 0, len(entries))
 		for _, entry := range entries {
 			if !strings.HasPrefix(entry.Key, ".") {
 				filtered = append(filtered, entry)
@@ -128,7 +128,7 @@ func (ls *LsCommand) listPath(ctx context.Context, api cmd.API, path string, lon
 }
 
 // printEntry prints a single directory entry
-func (ls *LsCommand) printEntry(metadata *data.VirtualFileMetadata, longFormat, humanReadable bool, writer io.Writer) {
+func (ls *LsCommand) printEntry(metadata *data.Metadata, longFormat, humanReadable bool, writer io.Writer) {
 	if longFormat {
 		// Long format: permissions, size, time, name
 		mode := metadata.Mode.String()

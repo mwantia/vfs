@@ -11,7 +11,7 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 )
 
-func (mb *MemoryBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileMetadata) error {
+func (mb *MemoryBackend) CreateMeta(ctx context.Context, meta *data.Metadata) error {
 	// Populate unique ID if not already defined
 	if meta.ID == "" {
 		meta.ID = uuid.Must(uuid.NewV7()).String()
@@ -40,7 +40,7 @@ func (mb *MemoryBackend) CreateMeta(ctx context.Context, meta *data.VirtualFileM
 	return nil
 }
 
-func (mb *MemoryBackend) ReadMeta(ctx context.Context, key string) (*data.VirtualFileMetadata, error) {
+func (mb *MemoryBackend) ReadMeta(ctx context.Context, key string) (*data.Metadata, error) {
 	id, exists := mb.keys.Get(key)
 	if !exists {
 		return nil, data.ErrNotExist
@@ -56,7 +56,7 @@ func (mb *MemoryBackend) ReadMeta(ctx context.Context, key string) (*data.Virtua
 	return meta, nil
 }
 
-func (mb *MemoryBackend) UpdateMeta(ctx context.Context, key string, update *data.VirtualFileMetadataUpdate) error {
+func (mb *MemoryBackend) UpdateMeta(ctx context.Context, key string, update *data.MetadataUpdate) error {
 	id, exists := mb.keys.Get(key)
 	if !exists {
 		return data.ErrNotExist
@@ -135,7 +135,7 @@ func (mb *MemoryBackend) ExistsMeta(ctx context.Context, key string) (bool, erro
 }
 
 func (mb *MemoryBackend) QueryMeta(ctx context.Context, query *backend.MetadataQuery) (*backend.MetadataQueryResult, error) {
-	var candidates []*data.VirtualFileMetadata
+	var candidates []*data.Metadata
 
 	if query.Delimiter == "/" {
 		// Delimiter mode: return only direct children

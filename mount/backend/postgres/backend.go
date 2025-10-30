@@ -164,9 +164,9 @@ func (pb *PostgresBackend) Close(ctx context.Context) error {
 }
 
 // GetCapabilities returns a list of capabilities supported by this backend.
-func (pb *PostgresBackend) GetCapabilities() *backend.VirtualBackendCapabilities {
-	return &backend.VirtualBackendCapabilities{
-		Capabilities: []backend.VirtualBackendCapability{
+func (pb *PostgresBackend) GetCapabilities() *backend.BackendCapabilities {
+	return &backend.BackendCapabilities{
+		Capabilities: []backend.BackendCapability{
 			backend.CapabilityObjectStorage,
 			backend.CapabilityMetadata,
 		},

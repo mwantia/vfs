@@ -9,9 +9,9 @@ type AclPermission struct {
 }
 
 type AclPermissionObject struct {
-	Type        AclPermissionType    `json:"type"`
-	Identifier  string               `json:"identifier"`
-	Permissions data.VirtualFileMode `json:"permissions"`
+	Type        AclPermissionType `json:"type"`
+	Identifier  string            `json:"identifier"`
+	Permissions data.FileMode     `json:"permissions"`
 }
 
 type AclPermissionType int

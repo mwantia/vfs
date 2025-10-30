@@ -33,7 +33,7 @@ type VirtualFileSystem interface {
 
 	// Mount attaches a filesystem handler at the specified path.
 	// Options can be used to configure the mount (e.g., read-only).
-	Mount(ctx context.Context, path string, primary backend.VirtualObjectStorageBackend, opts ...mount.MountOption) error
+	Mount(ctx context.Context, path string, primary backend.ObjectStorageBackend, opts ...mount.MountOption) error
 
 	// Unmount removes the filesystem handler at the specified path.
 	// Returns an error if the path is not mounted or has child mounts.
@@ -41,7 +41,7 @@ type VirtualFileSystem interface {
 
 	// OpenFile opens a file with the specified access mode flags and returns a file handle.
 	// The returned VirtualFile must be closed by the caller. Use flags to control access.
-	OpenFile(ctx context.Context, path string, flags data.VirtualAccessMode) (mount.Streamer, error)
+	OpenFile(ctx context.Context, path string, flags data.AccessMode) (mount.Streamer, error)
 
 	// CloseFile closes an open file handle at the given path.
 	// This may be a no-op for implementations that don't maintain file handles.
@@ -57,7 +57,7 @@ type VirtualFileSystem interface {
 
 	// Stat returns file information for the given path.
 	// Returns an error if the path doesn't exist.
-	StatMetadata(ctx context.Context, path string) (*data.VirtualFileMetadata, error)
+	StatMetadata(ctx context.Context, path string) (*data.Metadata, error)
 
 	// Lookup checks if a file or directory exists at the given path.
 	// Returns true if the path exists, false otherwise.
@@ -65,7 +65,7 @@ type VirtualFileSystem interface {
 
 	// ReadDirectory returns a list of entries in the directory at path.
 	// Returns an error if the path is not a directory or doesn't exist.
-	ReadDirectory(ctx context.Context, path string) ([]*data.VirtualFileMetadata, error)
+	ReadDirectory(ctx context.Context, path string) ([]*data.Metadata, error)
 
 	// CreateDirectory creates a new directory at the specified path.
 	// Returns an error if the directory already exists or cannot be created.

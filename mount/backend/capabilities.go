@@ -4,32 +4,34 @@ package backend
 
 import "slices"
 
-type VirtualBackendCapability string
+type BackendCapability string
 
 const (
 	// Core capabilities by backend
-	CapabilityMetadata      VirtualBackendCapability = "metadata"
-	CapabilityObjectStorage VirtualBackendCapability = "object_storage"
+	CapabilityMetadata      BackendCapability = "metadata"
+	CapabilityObjectStorage BackendCapability = "object_storage"
 
 	// Extension capabilities per 'metadata' or 'object-storage' backend
-	CapabilityACL        VirtualBackendCapability = "acl"
-	CapabilityCache      VirtualBackendCapability = "cache"
-	CapabilityEncrypt    VirtualBackendCapability = "encrypt"
-	CapabilitySnapshot   VirtualBackendCapability = "snapshot"
-	CapabilityStreaming  VirtualBackendCapability = "streaming"
-	CapabilityMultipart  VirtualBackendCapability = "multipart"
-	CapabilityVersioning VirtualBackendCapability = "versioning"
-	CapabilityRubbish    VirtualBackendCapability = "rubbish"
+	CapabilityACL        BackendCapability = "acl"
+	CapabilityCache      BackendCapability = "cache"
+	CapabilityEncrypt    BackendCapability = "encrypt"
+	CapabilityNamespace  BackendCapability = "namespace"
+	CapabilitySnapshot   BackendCapability = "snapshot"
+	CapabilityStreaming  BackendCapability = "streaming"
+	CapabilityMultipart  BackendCapability = "multipart"
+	CapabilityVersioning BackendCapability = "versioning"
+	CapabilityRubbish    BackendCapability = "rubbish"
 )
 
-func GetAllCapabilities() *VirtualBackendCapabilities {
-	return &VirtualBackendCapabilities{
-		Capabilities: []VirtualBackendCapability{
+func GetAllCapabilities() *BackendCapabilities {
+	return &BackendCapabilities{
+		Capabilities: []BackendCapability{
 			CapabilityMetadata,
 			CapabilityObjectStorage,
 			CapabilityACL,
 			CapabilityCache,
 			CapabilityEncrypt,
+			CapabilityNamespace,
 			CapabilitySnapshot,
 			CapabilityStreaming,
 			CapabilityMultipart,
@@ -39,14 +41,14 @@ func GetAllCapabilities() *VirtualBackendCapabilities {
 	}
 }
 
-// VirtualBackendCapabilities describes what a backend supports
-type VirtualBackendCapabilities struct {
-	Capabilities  []VirtualBackendCapability `json:"capabilities"`
-	MinObjectSize int64                      `json:"min_object_size"`
-	MaxObjectSize int64                      `json:"max_object_size"`
+// BackendCapabilities describes what a backend supports
+type BackendCapabilities struct {
+	Capabilities  []BackendCapability `json:"capabilities"`
+	MinObjectSize int64               `json:"min_object_size"`
+	MaxObjectSize int64               `json:"max_object_size"`
 }
 
 // Contains checks if a capability is supported
-func (vbc *VirtualBackendCapabilities) Contains(cap VirtualBackendCapability) bool {
+func (vbc *BackendCapabilities) Contains(cap BackendCapability) bool {
 	return slices.Contains(vbc.Capabilities, cap)
 }

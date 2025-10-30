@@ -6,16 +6,16 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-// VirtualMetadataBackend stores filesystem metadata (paths, sizes, timestamps, etc.)
+// MetadataBackend stores filesystem metadata (paths, sizes, timestamps, etc.)
 // This is the "fast index" layer - optimized for queries and listing
-type VirtualMetadataBackend interface {
-	VirtualBackend
+type MetadataBackend interface {
+	Backend
 
-	CreateMeta(ctx context.Context, meta *data.VirtualFileMetadata) error
+	CreateMeta(ctx context.Context, meta *data.Metadata) error
 
-	ReadMeta(ctx context.Context, key string) (*data.VirtualFileMetadata, error)
+	ReadMeta(ctx context.Context, key string) (*data.Metadata, error)
 
-	UpdateMeta(ctx context.Context, key string, update *data.VirtualFileMetadataUpdate) error
+	UpdateMeta(ctx context.Context, key string, update *data.MetadataUpdate) error
 
 	DeleteMeta(ctx context.Context, key string) error
 

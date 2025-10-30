@@ -20,7 +20,7 @@ type MetadataQuery struct {
 	ContentType *string `json:"content_type,omitempty"`
 
 	// Filter by file type (directory, regular file, symlink, etc.)
-	FilterType *data.VirtualFileType `json:"filter_type,omitempty"`
+	FilterType *data.FileType `json:"filter_type,omitempty"`
 
 	// Object size filtering
 	MinSize *int64 `json:"min_size,omitempty"`
@@ -42,7 +42,7 @@ type MetadataQuery struct {
 
 type MetadataQueryResult struct {
 	// List of all queried metadata candidates
-	Candidates []*data.VirtualFileMetadata
+	Candidates []*data.Metadata
 
 	// Total matches before pagination
 	TotalCount int
@@ -67,11 +67,12 @@ const (
 	SortDesc SortOrder = "desc"
 )
 
-func ApplyFilters(candidates []*data.VirtualFileMetadata, query *MetadataQuery) []*data.VirtualFileMetadata {
-	filtered := make([]*data.VirtualFileMetadata, 0)
+func ApplyFilters(candidates []*data.Metadata, query *MetadataQuery) []*data.Metadata {
+	filtered := make([]*data.Metadata, 0)
 	for _, meta := range candidates {
+		contentType := string(meta.ContentType)
 		// Content type query filter
-		if query.ContentType != nil && !matchContentType(meta.ContentType, *query.ContentType) {
+		if query.ContentType != nil && !matchContentType(contentType, *query.ContentType) {
 			continue
 		}
 		// File type query filter

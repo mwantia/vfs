@@ -38,11 +38,11 @@ type MountStreamer struct {
 	mnt    *Mount
 	path   string
 	offset int64
-	flags  data.VirtualAccessMode
+	flags  data.AccessMode
 	closed bool
 }
 
-func newMountStreamer(ctx context.Context, log *log.Logger, mnt *Mount, path string, offset int64, flags data.VirtualAccessMode) *MountStreamer {
+func newMountStreamer(ctx context.Context, log *log.Logger, mnt *Mount, path string, offset int64, flags data.AccessMode) *MountStreamer {
 	return &MountStreamer{
 		ctx:    ctx,
 		log:    log,
@@ -223,9 +223,9 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 		// Update metadata if available
 		if ms.mnt.Metadata != nil {
 			ms.log.Debug("Write: updating metadata size for %s (new_size=%d)", ms.path, ms.offset)
-			update := &data.VirtualFileMetadataUpdate{
-				Mask: data.VirtualFileMetadataUpdateSize,
-				Metadata: &data.VirtualFileMetadata{
+			update := &data.MetadataUpdate{
+				Mask: data.MetadataUpdateSize,
+				Metadata: &data.Metadata{
 					Size: ms.offset,
 				},
 			}

@@ -14,6 +14,7 @@ import (
 	"github.com/mwantia/vfs/mount/extension/cache"
 	"github.com/mwantia/vfs/mount/extension/encrypt"
 	"github.com/mwantia/vfs/mount/extension/multipart"
+	"github.com/mwantia/vfs/mount/extension/namespace"
 	"github.com/mwantia/vfs/mount/extension/rubbish"
 	"github.com/mwantia/vfs/mount/extension/snapshot"
 	"github.com/mwantia/vfs/mount/extension/versioning"
@@ -25,24 +26,25 @@ type Mount struct {
 	log       *log.Logger
 	streamers map[string]*MountStreamer
 
-	Path      string
-	Options   *MountOptions
-	MountTime time.Time // When the mount was created.
+	Path        string
+	Options     *MountOptions
+	MountTime   time.Time // When the mount was created.
+	IsDualMount bool
 
-	ObjectStorage backend.VirtualObjectStorageBackend
-	Metadata      backend.VirtualMetadataBackend
-	IsDualMount   bool
+	ObjectStorage backend.ObjectStorageBackend
+	Metadata      backend.MetadataBackend
 
-	ACL        acl.VirtualAclBackend
-	Cache      cache.VirtualCacheBackend
-	Encrypt    encrypt.VirtualEncryptBackend
-	Multipart  multipart.VirtualMultipartBackend
-	Rubbish    rubbish.VirtualRubbishBackend
-	Snapshot   snapshot.VirtualSnapshotBackend
-	Versioning versioning.VirtualVersioningBackend
+	ACL        acl.AclBackendExtension
+	Cache      cache.CacheBackendExtension
+	Encrypt    encrypt.EncryptBackendExtension
+	Multipart  multipart.MultipartBackendExtension
+	Namespace  namespace.NamespaceBackendExtension
+	Rubbish    rubbish.RubbishBackendExtension
+	Snapshot   snapshot.SnapshotBackendExtension
+	Versioning versioning.VersioningBackendExtension
 }
 
-func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectStorageBackend, opts ...MountOption) (*Mount, error) {
+func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBackend, opts ...MountOption) (*Mount, error) {
 	options := newDefaultMountOptions()
 	for _, opt := range opts {
 		if err := opt(options); err != nil {
@@ -65,13 +67,13 @@ func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectSto
 	// Perform capability check for extension ACL
 	if ext, exists := options.Backends[backend.CapabilityACL]; exists {
 		// Type validation for interface
-		acl, ok := ext.(acl.VirtualAclBackend)
+		acl, ok := ext.(acl.AclBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for ACL backend", ext.Name())
 		}
 		mnt.ACL = acl
 	} else if options.Auto && caps.Contains(backend.CapabilityACL) {
-		acl, ok := primary.(acl.VirtualAclBackend)
+		acl, ok := primary.(acl.AclBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for ACL backend", ext.Name())
 		}
@@ -80,13 +82,13 @@ func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectSto
 	// Perform capability check for extension Cache
 	if ext, exists := options.Backends[backend.CapabilityCache]; exists {
 		// Type validation for interface
-		cache, ok := ext.(cache.VirtualCacheBackend)
+		cache, ok := ext.(cache.CacheBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for Cache backend", ext.Name())
 		}
 		mnt.Cache = cache
 	} else if options.Auto && caps.Contains(backend.CapabilityCache) {
-		cache, ok := primary.(cache.VirtualCacheBackend)
+		cache, ok := primary.(cache.CacheBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Cache backend", ext.Name())
 		}
@@ -95,13 +97,13 @@ func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectSto
 	// Perform capability check for extension Encrypt
 	if ext, exists := options.Backends[backend.CapabilityEncrypt]; exists {
 		// Type validation for interface
-		encrypt, ok := ext.(encrypt.VirtualEncryptBackend)
+		encrypt, ok := ext.(encrypt.EncryptBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for Encrypt backend", ext.Name())
 		}
 		mnt.Encrypt = encrypt
 	} else if options.Auto && caps.Contains(backend.CapabilityEncrypt) {
-		encrypt, ok := primary.(encrypt.VirtualEncryptBackend)
+		encrypt, ok := primary.(encrypt.EncryptBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Encrypt backend", ext.Name())
 		}
@@ -110,13 +112,13 @@ func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectSto
 	// Perform capability check for extension Metadata
 	if ext, exists := options.Backends[backend.CapabilityMetadata]; exists {
 		// Type validation for interface
-		metadata, ok := ext.(backend.VirtualMetadataBackend)
+		metadata, ok := ext.(backend.MetadataBackend)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for Metadata backend", ext.Name())
 		}
 		mnt.Metadata = metadata
 	} else if options.Auto && caps.Contains(backend.CapabilityMetadata) {
-		metadata, ok := primary.(backend.VirtualMetadataBackend)
+		metadata, ok := primary.(backend.MetadataBackend)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Metadata backend", primary.Name())
 		}
@@ -127,28 +129,43 @@ func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectSto
 	// Perform capability check for extension Multipart
 	if ext, exists := options.Backends[backend.CapabilityMultipart]; exists {
 		// Type validation for interface
-		multipart, ok := ext.(multipart.VirtualMultipartBackend)
+		multipart, ok := ext.(multipart.MultipartBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for Multipart backend", ext.Name())
 		}
 		mnt.Multipart = multipart
 	} else if options.Auto && caps.Contains(backend.CapabilityMultipart) {
-		multipart, ok := primary.(multipart.VirtualMultipartBackend)
+		multipart, ok := primary.(multipart.MultipartBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Multipart backend", ext.Name())
 		}
 		mnt.Multipart = multipart
 	}
+	// Perform capability check for extension Namespace
+	if ext, exists := options.Backends[backend.CapabilityNamespace]; exists {
+		// Type validation for interface
+		namespace, ok := ext.(namespace.NamespaceBackendExtension)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse extension '%s' for namespace backend", ext.Name())
+		}
+		mnt.Namespace = namespace
+	} else if options.Auto && caps.Contains(backend.CapabilityNamespace) {
+		namespace, ok := primary.(namespace.NamespaceBackendExtension)
+		if !ok {
+			return nil, fmt.Errorf("failed to parse '%s' for namespace backend", ext.Name())
+		}
+		mnt.Namespace = namespace
+	}
 	// Perform capability check for extension Rubbish
 	if ext, exists := options.Backends[backend.CapabilityRubbish]; exists {
 		// Type validation for interface
-		rubbish, ok := ext.(rubbish.VirtualRubbishBackend)
+		rubbish, ok := ext.(rubbish.RubbishBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for Rubbish backend", ext.Name())
 		}
 		mnt.Rubbish = rubbish
 	} else if options.Auto && caps.Contains(backend.CapabilityRubbish) {
-		rubbish, ok := primary.(rubbish.VirtualRubbishBackend)
+		rubbish, ok := primary.(rubbish.RubbishBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Rubbish backend", ext.Name())
 		}
@@ -157,13 +174,13 @@ func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectSto
 	// Perform capability check for extension Snapshot
 	if ext, exists := options.Backends[backend.CapabilitySnapshot]; exists {
 		// Type validation for interface
-		snapshot, ok := ext.(snapshot.VirtualSnapshotBackend)
+		snapshot, ok := ext.(snapshot.SnapshotBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for Snapshot backend", ext.Name())
 		}
 		mnt.Snapshot = snapshot
 	} else if options.Auto && caps.Contains(backend.CapabilitySnapshot) {
-		snapshot, ok := primary.(snapshot.VirtualSnapshotBackend)
+		snapshot, ok := primary.(snapshot.SnapshotBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Snapshot backend", ext.Name())
 		}
@@ -172,13 +189,13 @@ func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectSto
 	// Perform capability check for extension Versioning
 	if ext, exists := options.Backends[backend.CapabilityVersioning]; exists {
 		// Type validation for interface
-		versioning, ok := ext.(versioning.VirtualVersioningBackend)
+		versioning, ok := ext.(versioning.VersioningBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse extension '%s' for Versioning backend", ext.Name())
 		}
 		mnt.Versioning = versioning
 	} else if options.Auto && caps.Contains(backend.CapabilityVersioning) {
-		versioning, ok := primary.(versioning.VirtualVersioningBackend)
+		versioning, ok := primary.(versioning.VersioningBackendExtension)
 		if !ok {
 			return nil, fmt.Errorf("failed to parse '%s' for Versioning backend", ext.Name())
 		}
@@ -186,7 +203,7 @@ func NewMountInfo(path string, log *log.Logger, primary backend.VirtualObjectSto
 	}
 
 	if !mnt.IsDualMount {
-		primaryAsMetadata, ok := primary.(backend.VirtualMetadataBackend)
+		primaryAsMetadata, ok := primary.(backend.MetadataBackend)
 		// Additional fallback check and validation
 		// Occurs if primary and metadata are defined manually
 		if ok && primaryAsMetadata == mnt.Metadata {
@@ -299,7 +316,7 @@ func (m *Mount) GetStreamer(path string) (Streamer, bool) {
 	return streamer, true
 }
 
-func (m *Mount) OpenStreamer(ctx context.Context, path string, offset int64, flags data.VirtualAccessMode) Streamer {
+func (m *Mount) OpenStreamer(ctx context.Context, path string, offset int64, flags data.AccessMode) Streamer {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -341,23 +358,24 @@ func (m *Mount) CloseStreamer(ctx context.Context, path string, force bool) erro
 }
 
 // getUniqueBackends returns a list of unique backends without duplicates
-func (m *Mount) getUniqueBackends() []backend.VirtualBackend {
+func (m *Mount) getUniqueBackends() []backend.Backend {
 	// Create list of all available backends
-	backends := []backend.VirtualBackend{
+	backends := []backend.Backend{
 		m.ObjectStorage,
 		m.ACL,
 		m.Cache,
 		m.Encrypt,
 		m.Metadata,
+		m.Namespace,
 		m.Multipart,
 		m.Rubbish,
 		m.Snapshot,
 		m.Versioning,
 	}
 	// Use map to track unique backend pointers
-	seen := make(map[backend.VirtualBackend]struct{})
+	seen := make(map[backend.Backend]struct{})
 	// Helper to add backend if not nil and not already seen
-	addBackend := func(b backend.VirtualBackend) {
+	addBackend := func(b backend.Backend) {
 		if b != nil {
 			seen[b] = struct{}{}
 		}
@@ -367,7 +385,7 @@ func (m *Mount) getUniqueBackends() []backend.VirtualBackend {
 		addBackend(backend)
 	}
 	// Convert map keys to slice
-	uniques := make([]backend.VirtualBackend, 0, len(seen))
+	uniques := make([]backend.Backend, 0, len(seen))
 	for b := range seen {
 		uniques = append(uniques, b)
 	}

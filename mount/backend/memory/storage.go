@@ -10,7 +10,12 @@ import (
 	"github.com/mwantia/vfs/data/errors"
 )
 
-func (mb *MemoryBackend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
+// Namespace returns the identifier used as namespace
+func (_ *MemoryBackend) Namespace() string {
+	return ""
+}
+
+func (mb *MemoryBackend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
@@ -112,8 +117,8 @@ func (mb *MemoryBackend) WriteObject(ctx context.Context, key string, offset int
 		meta.Size = writeEnd
 	}
 
-	update := &data.VirtualFileMetadataUpdate{
-		Mask:     data.VirtualFileMetadataUpdateSize,
+	update := &data.MetadataUpdate{
+		Mask:     data.MetadataUpdateSize,
 		Metadata: meta,
 	}
 
@@ -172,7 +177,7 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, key string, force boo
 	return mb.DeleteMeta(ctx, key)
 }
 
-func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.VirtualFileStat, error) {
+func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
 	mb.mu.RLock()
 	defer mb.mu.RUnlock()
 
@@ -185,7 +190,7 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 
 		// For files, return single entry
 		if !meta.Mode.IsDir() {
-			return []*data.VirtualFileStat{
+			return []*data.FileStat{
 				meta.ToStat(),
 			}, nil
 		}
@@ -199,7 +204,7 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	prefixLen := len(prefixKey)
 
 	// Use map to deduplicate direct children
-	children := make(map[string]*data.VirtualFileMetadata)
+	children := make(map[string]*data.Metadata)
 	// B-tree range scan: iterate over all paths starting with prefix
 	mb.keys.Scan(func(childPath string, childID string) bool {
 		// Skip the directory itself
@@ -248,7 +253,7 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	})
 
 	// Convert map to slice
-	result := make([]*data.VirtualFileStat, 0, len(children))
+	result := make([]*data.FileStat, 0, len(children))
 	for _, childMeta := range children {
 		stat := childMeta.ToStat()
 		result = append(result, stat)
@@ -257,7 +262,7 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, key string) ([]*data.V
 	return result, nil
 }
 
-func (mb *MemoryBackend) HeadObject(ctx context.Context, key string) (*data.VirtualFileStat, error) {
+func (mb *MemoryBackend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
 	mb.mu.RLock()
 	defer mb.mu.RUnlock()
 
@@ -301,8 +306,8 @@ func (mb *MemoryBackend) TruncateObject(ctx context.Context, key string, size in
 
 	meta.Size = size
 
-	update := &data.VirtualFileMetadataUpdate{
-		Mask:     data.VirtualFileMetadataUpdateSize,
+	update := &data.MetadataUpdate{
+		Mask:     data.MetadataUpdateSize,
 		Metadata: meta,
 	}
 

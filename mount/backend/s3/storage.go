@@ -12,7 +12,12 @@ import (
 	"github.com/mwantia/vfs/data/errors"
 )
 
-func (sb *S3Backend) CreateObject(ctx context.Context, key string, mode data.VirtualFileMode) (*data.VirtualFileStat, error) {
+// Namespace returns the identifier used as namespace
+func (_ *S3Backend) Namespace() string {
+	return ""
+}
+
+func (sb *S3Backend) CreateObject(ctx context.Context, key string, mode data.FileMode) (*data.FileStat, error) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -43,7 +48,7 @@ func (sb *S3Backend) CreateObject(ctx context.Context, key string, mode data.Vir
 		}
 	}
 
-	return &data.VirtualFileStat{
+	return &data.FileStat{
 		Key:  key,
 		Mode: mode,
 		Size: 0,
@@ -212,7 +217,7 @@ func (sb *S3Backend) DeleteObject(ctx context.Context, key string, force bool) e
 	return sb.client.RemoveObject(ctx, sb.bucketName, key, minio.RemoveObjectOptions{})
 }
 
-func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.VirtualFileStat, error) {
+func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.FileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
@@ -226,8 +231,8 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 
 			if !isDir {
 				// It's a file, return just this object
-				return []*data.VirtualFileStat{
-					sb.toVirtualFileStat(key, objInfo),
+				return []*data.FileStat{
+					sb.toFileStat(key, objInfo),
 				}, nil
 			}
 
@@ -243,7 +248,7 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 				Recursive: false,
 			})
 
-			var stats []*data.VirtualFileStat
+			var stats []*data.FileStat
 			for object := range objectsCh {
 				if object.Err != nil {
 					return nil, object.Err
@@ -262,7 +267,7 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 					continue
 				}
 
-				stats = append(stats, sb.toVirtualFileStat(relKey, object))
+				stats = append(stats, sb.toFileStat(relKey, object))
 			}
 
 			return stats, nil
@@ -283,7 +288,7 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 			Recursive: false,
 		})
 
-		var stats []*data.VirtualFileStat
+		var stats []*data.FileStat
 		hasObjects := false
 
 		for object := range objectsCh {
@@ -299,7 +304,7 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 				continue
 			}
 
-			stats = append(stats, sb.toVirtualFileStat(relKey, object))
+			stats = append(stats, sb.toFileStat(relKey, object))
 		}
 
 		if !hasObjects {
@@ -312,13 +317,13 @@ func (sb *S3Backend) ListObjects(ctx context.Context, key string) ([]*data.Virtu
 	return nil, err
 }
 
-func (sb *S3Backend) HeadObject(ctx context.Context, key string) (*data.VirtualFileStat, error) {
+func (sb *S3Backend) HeadObject(ctx context.Context, key string) (*data.FileStat, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
 	// Handle empty key (root of bucket) - return synthetic directory stat
 	if key == "" {
-		return &data.VirtualFileStat{
+		return &data.FileStat{
 			Key:        "",
 			Size:       0,
 			Mode:       data.ModeDir | 0755,
@@ -336,7 +341,7 @@ func (sb *S3Backend) HeadObject(ctx context.Context, key string) (*data.VirtualF
 		return nil, err
 	}
 
-	return sb.toVirtualFileStat(key, objInfo), nil
+	return sb.toFileStat(key, objInfo), nil
 }
 
 func (sb *S3Backend) TruncateObject(ctx context.Context, key string, size int64) error {
@@ -402,11 +407,11 @@ func (sb *S3Backend) TruncateObject(ctx context.Context, key string, size int64)
 
 // Helper methods
 
-// toVirtualFileStat converts minio.ObjectInfo to VirtualFileStat
-func (sb *S3Backend) toVirtualFileStat(key string, objInfo minio.ObjectInfo) *data.VirtualFileStat {
+// toFileStat converts minio.ObjectInfo to FileStat
+func (sb *S3Backend) toFileStat(key string, objInfo minio.ObjectInfo) *data.FileStat {
 	// Determine if it's a directory
 	isDir := strings.HasSuffix(objInfo.Key, "/") || objInfo.ContentType == "application/x-directory"
-	virtMode := data.VirtualFileMode(0644)
+	virtMode := data.FileMode(0644)
 
 	if isDir {
 		virtMode = data.ModeDir | 0755
@@ -414,7 +419,7 @@ func (sb *S3Backend) toVirtualFileStat(key string, objInfo minio.ObjectInfo) *da
 		key = strings.TrimSuffix(key, "/")
 	}
 
-	return &data.VirtualFileStat{
+	return &data.FileStat{
 		Key:        key,
 		Size:       objInfo.Size,
 		Mode:       virtMode,

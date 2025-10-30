@@ -13,7 +13,7 @@ type MemoryBackend struct {
 	mu sync.RWMutex
 
 	keys     *btree.Map[string, string]
-	metadata map[string]*data.VirtualFileMetadata
+	metadata map[string]*data.Metadata
 
 	datas       map[string][]byte
 	directories map[string][]string
@@ -22,7 +22,7 @@ type MemoryBackend struct {
 func NewMemoryBackend() *MemoryBackend {
 	return &MemoryBackend{
 		keys:        btree.NewMap[string, string](0),
-		metadata:    make(map[string]*data.VirtualFileMetadata),
+		metadata:    make(map[string]*data.Metadata),
 		datas:       make(map[string][]byte),
 		directories: make(map[string][]string),
 	}
@@ -59,9 +59,9 @@ func (mb *MemoryBackend) Close(ctx context.Context) error {
 }
 
 // GetCapabilities returns a list of capabilities supported by this backend.
-func (mb *MemoryBackend) GetCapabilities() *backend.VirtualBackendCapabilities {
-	return &backend.VirtualBackendCapabilities{
-		Capabilities: []backend.VirtualBackendCapability{
+func (mb *MemoryBackend) GetCapabilities() *backend.BackendCapabilities {
+	return &backend.BackendCapabilities{
+		Capabilities: []backend.BackendCapability{
 			backend.CapabilityObjectStorage,
 			backend.CapabilityMetadata,
 		},

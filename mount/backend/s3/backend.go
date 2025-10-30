@@ -63,9 +63,9 @@ func (sb *S3Backend) Close(ctx context.Context) error {
 }
 
 // GetCapabilities returns a list of capabilities supported by this backend.
-func (sb *S3Backend) GetCapabilities() *backend.VirtualBackendCapabilities {
-	return &backend.VirtualBackendCapabilities{
-		Capabilities: []backend.VirtualBackendCapability{
+func (sb *S3Backend) GetCapabilities() *backend.BackendCapabilities {
+	return &backend.BackendCapabilities{
+		Capabilities: []backend.BackendCapability{
 			backend.CapabilityObjectStorage,
 		},
 		// S3 supports objects from 0 bytes to 5TB, but we set a practical limit of 5GB

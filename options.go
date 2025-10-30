@@ -6,7 +6,6 @@ type VirtualFileSystemOptions struct {
 	LogLevel      log.LogLevel
 	LogFile       string
 	NoTerminalLog bool
-	BaseRootMount bool
 }
 
 type VirtualFileSystemOption func(*VirtualFileSystemOptions) error
@@ -34,13 +33,6 @@ func WithoutTerminalLog() VirtualFileSystemOption {
 func WithLogFile(logFile string) VirtualFileSystemOption {
 	return func(opts *VirtualFileSystemOptions) error {
 		opts.LogFile = logFile
-		return nil
-	}
-}
-
-func WithBaseRootMount() VirtualFileSystemOption {
-	return func(opts *VirtualFileSystemOptions) error {
-		opts.BaseRootMount = true
 		return nil
 	}
 }
