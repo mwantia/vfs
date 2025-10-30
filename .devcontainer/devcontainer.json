@@ -53,7 +53,7 @@
         "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
     },
     "postCreateCommand": "go mod download && go mod tidy",
-    "postAttachCommand": "tmux new-session -A -s vfs",
+    
     "overrideCommand": true,
     "mounts": [
         "source=../,target=/workspace,type=bind",
