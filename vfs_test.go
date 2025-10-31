@@ -8,75 +8,114 @@ import (
 
 	"github.com/mwantia/vfs"
 	"github.com/mwantia/vfs/data"
-	"github.com/mwantia/vfs/mount/backend"
-	"github.com/mwantia/vfs/mount/backend/local"
-	"github.com/mwantia/vfs/mount/backend/memory"
+	"github.com/mwantia/vfs/log"
+	"github.com/mwantia/vfs/mount"
+	"github.com/mwantia/vfs/mount/backend/direct"
+	"github.com/mwantia/vfs/mount/backend/ephemeral"
 	"github.com/mwantia/vfs/mount/backend/sqlite"
 )
 
-// TestBackendFactory creates a new backend instance for testing.
-type TestBackendFactory func(t *testing.T) (backend.ObjectStorageBackend, error)
+type TestMountFactory func(tst *testing.T, fs vfs.VirtualFileSystem) error
 
-// GetTestBackendFactories returns all backend implementations to test.
-func GetTestBackendFactories() map[string]TestBackendFactory {
-	factories := map[string]TestBackendFactory{
-		"memory": func(t *testing.T) (backend.ObjectStorageBackend, error) {
-			return memory.NewMemoryBackend(), nil
+func GetTestMountFactories() map[string]TestMountFactory {
+	return map[string]TestMountFactory{
+		"ephemeral-only": func(tst *testing.T, fs vfs.VirtualFileSystem) error {
+			ctx := tst.Context()
+			storage := ephemeral.NewEphemeralBackend()
+
+			return fs.Mount(ctx, "/", storage)
 		},
-		"sqlite": func(t *testing.T) (backend.ObjectStorageBackend, error) {
-			return sqlite.NewSQLiteBackend(":memory:")
+		"sqlite-only": func(tst *testing.T, fs vfs.VirtualFileSystem) error {
+			ctx := tst.Context()
+			storage, err := sqlite.NewSQLiteBackend(":memory:")
+			if err != nil {
+				return err
+			}
+
+			return fs.Mount(ctx, "/", storage)
 		},
-		"local": func(t *testing.T) (backend.ObjectStorageBackend, error) {
-			return local.NewLocalBackend(t.TempDir()), nil
+		"direct-only": func(tst *testing.T, fs vfs.VirtualFileSystem) error {
+			ctx := tst.Context()
+			path := tst.TempDir()
+			storage, err := direct.NewDirectBackend(path)
+			if err != nil {
+				return err
+			}
+
+			return fs.Mount(ctx, "/", storage)
+		},
+
+		"ephemeral-metadata": func(tst *testing.T, fs vfs.VirtualFileSystem) error {
+			ctx := tst.Context()
+			storage := ephemeral.NewEphemeralBackend()
+
+			return fs.Mount(ctx, "/", storage, mount.WithMetadata(storage))
+		},
+		"sqlite-metadata": func(tst *testing.T, fs vfs.VirtualFileSystem) error {
+			ctx := tst.Context()
+			storage, err := sqlite.NewSQLiteBackend(":memory:")
+			if err != nil {
+				return err
+			}
+			metadata := ephemeral.NewEphemeralBackend()
+
+			return fs.Mount(ctx, "/", storage, mount.WithMetadata(metadata))
+		},
+		"direct-metadata": func(tst *testing.T, fs vfs.VirtualFileSystem) error {
+			ctx := tst.Context()
+			path := tst.TempDir()
+			storage, err := direct.NewDirectBackend(path)
+			if err != nil {
+				return err
+			}
+
+			metadata := ephemeral.NewEphemeralBackend()
+
+			return fs.Mount(ctx, "/", storage, mount.WithMetadata(metadata))
 		},
 	}
-
-	return factories
 }
 
-// TestAllBackends_FileOperations verifies basic file create, write, and read operations
-// across all backend implementations.
-func TestAllBackends_FileOperations(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_FileOperations verifies basic file create, write, and read operations across all backend implementations.
+func TestAllMounts_FileOperations(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend init failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Mount failed: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
 			defer fs.Unmount(ctx, "/", false)
 
-			// Create and write file
-			f, err := fs.OpenFile(ctx, "/test.txt", data.AccessModeWrite|data.AccessModeCreate)
+			// TODO :: New Logic here...
+			streamer, err := fs.OpenFile(ctx, "/test.txt", data.AccessModeWrite|data.AccessModeCreate)
 			if err != nil {
 				tst.Fatalf("Open for write failed: %v", err)
 			}
 
 			buffer := []byte("hello world")
-			if _, err := f.Write(buffer); err != nil {
+			if _, err := streamer.Write(buffer); err != nil {
 				tst.Fatalf("Write failed: %v", err)
 			}
 
-			if err := f.Close(); err != nil {
+			if err := streamer.Close(); err != nil {
 				tst.Fatalf("Close failed: %v", err)
 			}
 
 			// Read file
-			f, err = fs.OpenFile(ctx, "/test.txt", data.AccessModeRead)
+			streamer, err = fs.OpenFile(ctx, "/test.txt", data.AccessModeRead)
 			if err != nil {
 				tst.Fatalf("Open for read failed: %v", err)
 			}
-			defer f.Close()
+			defer streamer.Close()
 
-			got, err := io.ReadAll(f)
+			got, err := io.ReadAll(streamer)
 			if err != nil {
 				tst.Fatalf("ReadAll failed: %v", err)
 			}
@@ -85,15 +124,14 @@ func TestAllBackends_FileOperations(t *testing.T) {
 				tst.Errorf("Expected %q, got %q", buffer, got)
 			}
 
-			// Close before unlink
-			f.Close()
+			if err := streamer.Close(); err != nil {
+				tst.Fatalf("Close failed: %v", err)
+			}
 
-			// Remove file
 			if err := fs.UnlinkFile(ctx, "/test.txt"); err != nil {
 				tst.Fatalf("Unlink failed: %v", err)
 			}
 
-			// Verify removed
 			if _, err := fs.StatMetadata(ctx, "/test.txt"); err != data.ErrNotExist {
 				tst.Errorf("Expected ErrNotExist, got %v", err)
 			}
@@ -101,32 +139,27 @@ func TestAllBackends_FileOperations(t *testing.T) {
 	}
 }
 
-// TestAllBackends_DirectoryOperations verifies directory creation, listing, and removal
-// across all backend implementations.
-func TestAllBackends_DirectoryOperations(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_DirectoryOperations verifies directory creation, listing, and removal across all backend implementations.
+func TestAllMounts_DirectoryOperations(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend init failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Mount failed: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
 			defer fs.Unmount(ctx, "/", false)
 
-			// Create directory
 			if err := fs.CreateDirectory(ctx, "/data"); err != nil {
 				tst.Fatalf("MkDir failed: %v", err)
 			}
 
-			// Create files in directory
 			for i, name := range []string{"file1.txt", "file2.txt", "file3.txt"} {
 				f, err := fs.OpenFile(ctx, "/data/"+name, data.AccessModeWrite|data.AccessModeCreate)
 				if err != nil {
@@ -136,7 +169,6 @@ func TestAllBackends_DirectoryOperations(t *testing.T) {
 				f.Close()
 			}
 
-			// List directory
 			entries, err := fs.ReadDirectory(ctx, "/data")
 			if err != nil {
 				tst.Fatalf("ReadDir failed: %v", err)
@@ -146,12 +178,10 @@ func TestAllBackends_DirectoryOperations(t *testing.T) {
 				tst.Errorf("Expected 3 entries, got %d", len(entries))
 			}
 
-			// RmDir on non-empty directory should fail
 			if err := fs.RemoveDirectory(ctx, "/data", false); err == nil {
 				tst.Error("Expected error removing non-empty directory")
 			}
 
-			// Verify directory still exists
 			if _, err := fs.StatMetadata(ctx, "/data"); err != nil {
 				tst.Errorf("Directory should still exist, got %v", err)
 			}
@@ -159,27 +189,23 @@ func TestAllBackends_DirectoryOperations(t *testing.T) {
 	}
 }
 
-// TestAllBackends_NestedPaths verifies deeply nested directory and file operations
-// across all backend implementations.
-func TestAllBackends_NestedPaths(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_NestedPaths verifies deeply nested directory and file operations across all backend implementations.
+func TestAllMounts_NestedPaths(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend init failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Mount failed: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
 			defer fs.Unmount(ctx, "/", false)
 
-			// Create nested directories manually
 			if err := fs.CreateDirectory(ctx, "/a"); err != nil {
 				tst.Fatalf("MkDir /a failed: %v", err)
 			}
@@ -190,15 +216,13 @@ func TestAllBackends_NestedPaths(t *testing.T) {
 				tst.Fatalf("MkDir /a/b/c failed: %v", err)
 			}
 
-			// Create nested file
-			f, err := fs.OpenFile(ctx, "/a/b/c/file.txt", data.AccessModeWrite|data.AccessModeCreate)
+			streamer, err := fs.OpenFile(ctx, "/a/b/c/file.txt", data.AccessModeWrite|data.AccessModeCreate)
 			if err != nil {
 				tst.Fatalf("Open nested file failed: %v", err)
 			}
-			f.Write([]byte("nested"))
-			f.Close()
+			streamer.Write([]byte("nested"))
+			streamer.Close()
 
-			// Verify file exists
 			info, err := fs.StatMetadata(ctx, "/a/b/c/file.txt")
 			if err != nil {
 				tst.Fatalf("Stat nested file failed: %v", err)
@@ -208,7 +232,6 @@ func TestAllBackends_NestedPaths(t *testing.T) {
 				tst.Error("Expected file, got directory")
 			}
 
-			// Verify parent dirs exist
 			info, err = fs.StatMetadata(ctx, "/a/b")
 			if err != nil {
 				tst.Fatalf("Stat parent dir failed: %v", err)
@@ -221,47 +244,39 @@ func TestAllBackends_NestedPaths(t *testing.T) {
 	}
 }
 
-// TestAllBackends_ErrorCases verifies proper error handling for invalid operations
-// across all backend implementations.
-func TestAllBackends_ErrorCases(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_ErrorCases verifies proper error handling for invalid operations across all backend implementations.
+func TestAllMounts_ErrorCases(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend init failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Mount failed: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
 			defer fs.Unmount(ctx, "/", false)
 
-			// Stat non-existent file
 			if _, err := fs.StatMetadata(ctx, "/nonexistent"); err != data.ErrNotExist {
 				tst.Errorf("Expected ErrNotExist, got %v", err)
 			}
 
-			// Open non-existent file for reading
 			if _, err := fs.OpenFile(ctx, "/nonexistent", data.AccessModeRead); err != data.ErrNotExist {
 				tst.Errorf("Expected ErrNotExist on Open for read, got %v", err)
 			}
 
-			// Create directory
 			if err := fs.CreateDirectory(ctx, "/testdir"); err != nil {
 				tst.Fatalf("MkDir failed: %v", err)
 			}
 
-			// Try to open directory for reading
 			if _, err := fs.OpenFile(ctx, "/testdir", data.AccessModeRead); err == nil {
 				tst.Error("Expected error opening directory for reading")
 			}
 
-			// Try to unlink directory (should fail)
 			if err := fs.UnlinkFile(ctx, "/testdir"); err == nil {
 				tst.Error("Expected error unlinking directory")
 			}
@@ -269,37 +284,32 @@ func TestAllBackends_ErrorCases(t *testing.T) {
 	}
 }
 
-// TestAllBackends_StatOperations verifies file and directory stat operations
-// across all backend implementations.
-func TestAllBackends_StatOperations(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_StatOperations verifies file and directory stat operations across all backend implementations.
+func TestAllMounts_StatOperations(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend init failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Mount failed: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
 			defer fs.Unmount(ctx, "/", false)
 
-			// Create file with known content
-			f, err := fs.OpenFile(ctx, "/stattest.txt", data.AccessModeWrite|data.AccessModeCreate)
+			streamer, err := fs.OpenFile(ctx, "/stattest.txt", data.AccessModeWrite|data.AccessModeCreate)
 			if err != nil {
 				tst.Fatalf("Open for write failed: %v", err)
 			}
 
 			content := []byte("test content for stat")
-			f.Write(content)
-			f.Close()
+			streamer.Write(content)
+			streamer.Close()
 
-			// Stat file
 			info, err := fs.StatMetadata(ctx, "/stattest.txt")
 			if err != nil {
 				tst.Fatalf("Stat failed: %v", err)
@@ -317,7 +327,6 @@ func TestAllBackends_StatOperations(t *testing.T) {
 				tst.Error("Expected file, got directory")
 			}
 
-			// Create and stat directory
 			if err := fs.CreateDirectory(ctx, "/statdir"); err != nil {
 				tst.Fatalf("MkDir failed: %v", err)
 			}
@@ -338,50 +347,45 @@ func TestAllBackends_StatOperations(t *testing.T) {
 	}
 }
 
-// TestAllBackends_MultipleFiles verifies handling of multiple concurrent files
-// across all backend implementations.
-func TestAllBackends_MultipleFiles(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_MultipleFilesOperations verifies handling of multiple concurrent files across all backend implementations.
+func TestAllMounts_MultipleFilesOperations(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend init failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Mount failed: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
 			defer fs.Unmount(ctx, "/", false)
 
-			// Create multiple files
 			fileCount := 10
 			for i := 0; i < fileCount; i++ {
 				filename := fmt.Sprintf("/file%d.txt", i)
-				f, err := fs.OpenFile(ctx, filename, data.AccessModeWrite|data.AccessModeCreate)
+				streamer, err := fs.OpenFile(ctx, filename, data.AccessModeWrite|data.AccessModeCreate)
 				if err != nil {
 					tst.Fatalf("Open %s failed: %v", filename, err)
 				}
 
 				content := []byte(fmt.Sprintf("content for file %d", i))
-				f.Write(content)
-				f.Close()
+				streamer.Write(content)
+				streamer.Close()
 			}
 
-			// Verify all files exist and have correct content
 			for i := 0; i < fileCount; i++ {
 				filename := fmt.Sprintf("/file%d.txt", i)
-				f, err := fs.OpenFile(ctx, filename, data.AccessModeRead)
+				streamer, err := fs.OpenFile(ctx, filename, data.AccessModeRead)
 				if err != nil {
 					tst.Fatalf("Open %s for read failed: %v", filename, err)
 				}
 
-				got, _ := io.ReadAll(f)
-				f.Close()
+				got, _ := io.ReadAll(streamer)
+				streamer.Close()
 
 				expected := []byte(fmt.Sprintf("content for file %d", i))
 				if !bytes.Equal(got, expected) {
@@ -392,50 +396,46 @@ func TestAllBackends_MultipleFiles(t *testing.T) {
 	}
 }
 
-// TestAllBackends_FileAppend verifies appending to existing files
-// across all backend implementations.
-func TestAllBackends_FileAppend(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_FileAppendOperations verifies appending to existing files across all backend implementations
+func TestAllMounts_FileAppendOperations(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend init failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Mount failed: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
 			defer fs.Unmount(ctx, "/", false)
 
-			// Create initial file
-			f, err := fs.OpenFile(ctx, "/append.txt", data.AccessModeWrite|data.AccessModeCreate)
+			streamer, err := fs.OpenFile(ctx, "/append.txt", data.AccessModeWrite|data.AccessModeCreate)
 			if err != nil {
 				tst.Fatalf("Open for write failed: %v", err)
 			}
-			f.Write([]byte("first "))
-			f.Close()
+			streamer.Write([]byte("first "))
+			streamer.Close()
 
 			// Append to file
-			f, err = fs.OpenFile(ctx, "/append.txt", data.AccessModeWrite|data.AccessModeAppend)
+			streamer, err = fs.OpenFile(ctx, "/append.txt", data.AccessModeWrite|data.AccessModeAppend)
 			if err != nil {
 				tst.Fatalf("Open for append failed: %v", err)
 			}
-			f.Write([]byte("second"))
-			f.Close()
+			streamer.Write([]byte("second"))
+			streamer.Close()
 
 			// Read and verify
-			f, err = fs.OpenFile(ctx, "/append.txt", data.AccessModeRead)
+			streamer, err = fs.OpenFile(ctx, "/append.txt", data.AccessModeRead)
 			if err != nil {
 				tst.Fatalf("Open for read failed: %v", err)
 			}
-			defer f.Close()
+			defer streamer.Close()
 
-			got, _ := io.ReadAll(f)
+			got, _ := io.ReadAll(streamer)
 			expected := []byte("first second")
 
 			if !bytes.Equal(got, expected) {
@@ -445,50 +445,44 @@ func TestAllBackends_FileAppend(t *testing.T) {
 	}
 }
 
-// TestAllBackends_FileTruncate verifies truncating existing files
-// across all backend implementations.
-func TestAllBackends_FileTruncate(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_FileTruncateOperations verifies truncating existing files across all backend implementations.
+func TestAllMounts_FileTruncateOperations(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend init failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Mount failed: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
 			defer fs.Unmount(ctx, "/", false)
 
-			// Create initial file
-			f, err := fs.OpenFile(ctx, "/trunc.txt", data.AccessModeWrite|data.AccessModeCreate)
+			streamer, err := fs.OpenFile(ctx, "/trunc.txt", data.AccessModeWrite|data.AccessModeCreate)
 			if err != nil {
 				tst.Fatalf("Open for write failed: %v", err)
 			}
-			f.Write([]byte("original content"))
-			f.Close()
+			streamer.Write([]byte("original content"))
+			streamer.Close()
 
-			// Truncate and write new content
-			f, err = fs.OpenFile(ctx, "/trunc.txt", data.AccessModeWrite|data.AccessModeTrunc)
+			streamer, err = fs.OpenFile(ctx, "/trunc.txt", data.AccessModeWrite|data.AccessModeTrunc)
 			if err != nil {
 				tst.Fatalf("Open for truncate failed: %v", err)
 			}
-			f.Write([]byte("new"))
-			f.Close()
+			streamer.Write([]byte("new"))
+			streamer.Close()
 
-			// Read and verify
-			f, err = fs.OpenFile(ctx, "/trunc.txt", data.AccessModeRead)
+			streamer, err = fs.OpenFile(ctx, "/trunc.txt", data.AccessModeRead)
 			if err != nil {
 				tst.Fatalf("Open for read failed: %v", err)
 			}
-			defer f.Close()
+			defer streamer.Close()
 
-			got, _ := io.ReadAll(f)
+			got, _ := io.ReadAll(streamer)
 			expected := []byte("new")
 
 			if !bytes.Equal(got, expected) {
@@ -498,31 +492,27 @@ func TestAllBackends_FileTruncate(t *testing.T) {
 	}
 }
 
-// TestAllBackends_EmptyDirectory verifies empty directory operations
-// across all backend implementations.
-func TestAllBackends_EmptyDirectory(t *testing.T) {
-	factories := GetTestBackendFactories()
+// TestAllMounts_EmptyDirectoryOperations verifies empty directory operations across all backend implementations.
+func TestAllMounts_EmptyDirectoryOperations(t *testing.T) {
+	factories := GetTestMountFactories()
 
 	for name, factory := range factories {
 		t.Run(name, func(tst *testing.T) {
 			ctx := tst.Context()
-			fs, _ := vfs.NewVirtualFileSystem()
-
-			backend, err := factory(t)
+			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
-				tst.Fatalf("Backend initialization failed: %v", err)
+				tst.Fatalf("Failed to initialize vfs: %v", err)
 			}
 
-			if err := fs.Mount(ctx, "/", backend); err != nil {
-				tst.Fatalf("Failed to mount primary backend: %v", err)
+			if err := factory(tst, fs); err != nil {
+				tst.Fatalf("Failed to mount: %v", err)
 			}
+			defer fs.Unmount(ctx, "/", false)
 
-			// Create empty directory
 			if err := fs.CreateDirectory(ctx, "/empty"); err != nil {
 				tst.Fatalf("Failed to create empty directory: %v", err)
 			}
 
-			// List empty directory
 			entries, err := fs.ReadDirectory(ctx, "/empty")
 			if err != nil {
 				tst.Fatalf("Failed to read empty directory: %v", err)
@@ -536,7 +526,6 @@ func TestAllBackends_EmptyDirectory(t *testing.T) {
 				tst.Fatalf("Failed to delete empty directory: %v", err)
 			}
 
-			// Verify directory doesn't exist anymore
 			if _, err := fs.StatMetadata(ctx, "/empty"); err != data.ErrNotExist {
 				tst.Errorf("Expected ErrNotExist after deletion, but got '%v'", err)
 			}

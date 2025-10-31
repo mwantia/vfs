@@ -1,4 +1,4 @@
-package local
+package direct
 
 import (
 	"context"
@@ -12,29 +12,29 @@ import (
 	"github.com/mwantia/vfs/mount/backend"
 )
 
-type LocalBackend struct {
+type DirectBackend struct {
 	mu   sync.RWMutex
 	path string
 }
 
-func NewLocalBackend(path string) *LocalBackend {
-	return &LocalBackend{
+func NewDirectBackend(path string) (*DirectBackend, error) {
+	return &DirectBackend{
 		path: filepath.Clean(path),
-	}
+	}, nil
 }
 
 // Returns the identifier name defined for this backend
-func (*LocalBackend) Name() string {
-	return "local"
+func (*DirectBackend) Name() string {
+	return "direct"
 }
 
 // Open is part of the lifecycle behavious and gets called when opening this backend.
-func (lb *LocalBackend) Open(ctx context.Context) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
+func (db *DirectBackend) Open(ctx context.Context) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	// Verify the root directory exists
-	info, err := os.Stat(lb.path)
+	info, err := os.Stat(db.path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return data.ErrMountFailed
@@ -55,30 +55,30 @@ func (lb *LocalBackend) Open(ctx context.Context) error {
 }
 
 // Close is part of the lifecycle behaviour and gets called when closing this backend.
-func (lb *LocalBackend) Close(ctx context.Context) error {
+func (db *DirectBackend) Close(ctx context.Context) error {
 	// The underlying filesystem persists independently
 	return nil
 }
 
 // GetCapabilities returns a list of capabilities supported by this backend.
-func (lb *LocalBackend) GetCapabilities() *backend.BackendCapabilities {
+func (db *DirectBackend) GetCapabilities() *backend.BackendCapabilities {
 	return &backend.BackendCapabilities{
 		Capabilities: []backend.BackendCapability{
 			backend.CapabilityObjectStorage,
 		},
-		// Local filesystem limits vary by OS/filesystem, but we set a practical limit
+		// Ephemeral filesystem limits vary by OS/filesystem, but we set a practical limit
 		// of 10GB for typical VFS use cases. Adjust as needed for your requirements.
 		MaxObjectSize: 10737418240, // 10 GB
 	}
 }
 
 // resolvePath joins the backend path with the relative path.
-func (lb *LocalBackend) resolvePath(path string) string {
-	return filepath.Join(lb.path, filepath.Clean(path))
+func (db *DirectBackend) resolvePath(path string) string {
+	return filepath.Join(db.path, filepath.Clean(path))
 }
 
 // toVirtualFileStat converts os.FileInfo to a VirtualFileStat.
-func (lb *LocalBackend) toFileStat(key string, fileInfo os.FileInfo) *data.FileStat {
+func (db *DirectBackend) toFileStat(key string, fileInfo os.FileInfo) *data.FileStat {
 	virtMode := data.FileMode(fileInfo.Mode().Perm())
 	if fileInfo.IsDir() {
 		virtMode |= data.ModeDir

@@ -437,13 +437,12 @@ func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string)
 
 	// Check if this path is itself a mount point
 	vfs.mu.RLock()
-	_, isMountPoint := vfs.mnts[absolute]
+	directMnt, isMountPoint := vfs.mnts[absolute]
 	vfs.mu.RUnlock()
 
 	if isMountPoint {
 		vfs.log.Debug("StatMetadata: path %s is a mount point, returning virtual metadata", absolute)
 		// Return virtual metadata for the mount point itself
-		now := time.Now()
 		// Extract the mount point name (last component of the path)
 		mountName := absolute
 		if lastSlash := strings.LastIndex(absolute, "/"); lastSlash >= 0 && lastSlash < len(absolute)-1 {
@@ -452,14 +451,20 @@ func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string)
 			mountName = ""
 		}
 
+		// Set permissions based on readonly status
+		perms := data.FileMode(0755)
+		if directMnt.Options.IsReadOnly {
+			perms = 0555 // readonly: r-xr-xr-x
+		}
+
 		return &data.Metadata{
 			ID:          absolute,
 			Key:         mountName,
-			Mode:        data.ModeMount | data.ModeDir | 0755,
+			Mode:        data.ModeMount | data.ModeDir | perms,
 			Size:        0,
-			AccessTime:  now,
-			ModifyTime:  now,
-			CreateTime:  now,
+			AccessTime:  time.Now(),
+			ModifyTime:  directMnt.MountTime,
+			CreateTime:  directMnt.MountTime,
 			ContentType: "inode/directory",
 		}, nil
 	}

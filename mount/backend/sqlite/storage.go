@@ -26,7 +26,7 @@ func (sb *SQLiteBackend) CreateObject(ctx context.Context, namespace, key string
 	// Verify parent directory exists
 	parentKey := path.Dir(key)
 	if parentKey != "." && parentKey != "" {
-		parentMeta, err := sb.ReadMeta(ctx, namespace, parentKey)
+		parentMeta, err := sb.readMetaUnsafe(ctx, namespace, parentKey)
 		if err != nil {
 			return nil, data.ErrNotExist
 		}
@@ -39,14 +39,14 @@ func (sb *SQLiteBackend) CreateObject(ctx context.Context, namespace, key string
 	meta := data.NewFileMetadata(key, 0, mode)
 	stat := meta.ToStat()
 
-	return stat, sb.CreateMeta(ctx, namespace, meta)
+	return stat, sb.createMetaUnsafe(ctx, namespace, meta)
 }
 
 func (sb *SQLiteBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
-	meta, err := sb.ReadMeta(ctx, namespace, key)
+	meta, err := sb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return 0, err
 	}
@@ -86,7 +86,7 @@ func (sb *SQLiteBackend) WriteObject(ctx context.Context, namespace, key string,
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
-	meta, err := sb.ReadMeta(ctx, namespace, key)
+	meta, err := sb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return 0, err
 	}
@@ -175,7 +175,7 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, namespace, key string
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
-	meta, err := sb.ReadMeta(ctx, namespace, key)
+	meta, err := sb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, namespace, key string
 
 		// Delete all collected paths
 		for _, delKey := range keysToDelete {
-			if err := sb.DeleteMeta(ctx, namespace, delKey); err != nil {
+			if err := sb.deleteMetaUnsafe(ctx, namespace, delKey); err != nil {
 				errs.Add(err)
 			}
 		}
@@ -219,7 +219,7 @@ func (sb *SQLiteBackend) DeleteObject(ctx context.Context, namespace, key string
 		return errs.Errors()
 	}
 
-	return sb.DeleteMeta(ctx, namespace, key)
+	return sb.deleteMetaUnsafe(ctx, namespace, key)
 }
 
 func (sb *SQLiteBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
@@ -228,7 +228,7 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, namespace, key string)
 
 	// For root directory, skip the existence check - root is implicit
 	if key != "" {
-		meta, err := sb.ReadMeta(ctx, namespace, key)
+		meta, err := sb.readMetaUnsafe(ctx, namespace, key)
 		if err != nil {
 			return nil, err
 		}
@@ -280,13 +280,13 @@ func (sb *SQLiteBackend) ListObjects(ctx context.Context, namespace, key string)
 					dirKey += "/"
 				}
 				dirKey += childName
-				dirMeta, err := sb.ReadMeta(ctx, namespace, dirKey)
+				dirMeta, err := sb.readMetaUnsafe(ctx, namespace, dirKey)
 				if err == nil {
 					children[childName] = dirMeta
 				}
 			}
 		} else {
-			childMeta, err := sb.ReadMeta(ctx, namespace, childKey)
+			childMeta, err := sb.readMetaUnsafe(ctx, namespace, childKey)
 			if err == nil {
 				children[rel] = childMeta
 			}
@@ -310,7 +310,7 @@ func (sb *SQLiteBackend) HeadObject(ctx context.Context, namespace, key string) 
 	sb.mu.RLock()
 	defer sb.mu.RUnlock()
 
-	meta, err := sb.ReadMeta(ctx, namespace, key)
+	meta, err := sb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +322,7 @@ func (sb *SQLiteBackend) TruncateObject(ctx context.Context, namespace, key stri
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
-	meta, err := sb.ReadMeta(ctx, namespace, key)
+	meta, err := sb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return err
 	}

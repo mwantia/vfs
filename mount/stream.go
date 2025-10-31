@@ -234,7 +234,7 @@ func (ms *MountStreamer) Write(p []byte) (n int, err error) {
 				},
 			}
 
-			if err := ms.mnt.Metadata.UpdateMeta(ms.ctx, ms.path, namespace, update); err != nil {
+			if err := ms.mnt.Metadata.UpdateMeta(ms.ctx, namespace, ms.path, update); err != nil {
 				ms.log.Warn("Write: failed to update metadata for %s - %v", ms.path, err)
 				return 0, err
 			}

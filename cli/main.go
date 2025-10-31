@@ -11,7 +11,7 @@ import (
 	"github.com/mwantia/vfs/log"
 	"github.com/mwantia/vfs/mount"
 	"github.com/mwantia/vfs/mount/backend/consul"
-	"github.com/mwantia/vfs/mount/backend/memory"
+	"github.com/mwantia/vfs/mount/backend/ephemeral"
 	"github.com/mwantia/vfs/mount/backend/s3"
 	"github.com/mwantia/vfs/mount/backend/sqlite"
 
@@ -27,7 +27,7 @@ func setupDemoVFS(ctx context.Context) (vfs.VirtualFileSystem, error) {
 	}
 
 	// Mount the backend at root
-	if err := fs.Mount(ctx, "/", memory.NewMemoryBackend()); err != nil {
+	if err := fs.Mount(ctx, "/", ephemeral.NewEphemeralBackend()); err != nil {
 		return nil, fmt.Errorf("failed to mount: %w", err)
 	}
 

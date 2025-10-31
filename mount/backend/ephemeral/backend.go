@@ -1,4 +1,4 @@
-package memory
+package ephemeral
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type MemoryBackend struct {
+type EphemeralBackend struct {
 	mu sync.RWMutex
 
 	keys     *btree.Map[string, string]
@@ -19,8 +19,8 @@ type MemoryBackend struct {
 	directories map[string][]string
 }
 
-func NewMemoryBackend() *MemoryBackend {
-	return &MemoryBackend{
+func NewEphemeralBackend() *EphemeralBackend {
+	return &EphemeralBackend{
 		keys:        btree.NewMap[string, string](0),
 		metadata:    make(map[string]*data.Metadata),
 		datas:       make(map[string][]byte),
@@ -29,12 +29,12 @@ func NewMemoryBackend() *MemoryBackend {
 }
 
 // Returns the identifier name defined for this backend
-func (*MemoryBackend) Name() string {
-	return "memory"
+func (*EphemeralBackend) Name() string {
+	return "ephemeral"
 }
 
 // Open is part of the lifecycle behavious and gets called when opening this backend.
-func (mb *MemoryBackend) Open(ctx context.Context) error {
+func (mb *EphemeralBackend) Open(ctx context.Context) error {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
@@ -43,7 +43,7 @@ func (mb *MemoryBackend) Open(ctx context.Context) error {
 }
 
 // Close is part of the lifecycle behaviour and gets called when closing this backend.
-func (mb *MemoryBackend) Close(ctx context.Context) error {
+func (mb *EphemeralBackend) Close(ctx context.Context) error {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
@@ -59,7 +59,7 @@ func (mb *MemoryBackend) Close(ctx context.Context) error {
 }
 
 // GetCapabilities returns a list of capabilities supported by this backend.
-func (mb *MemoryBackend) GetCapabilities() *backend.BackendCapabilities {
+func (mb *EphemeralBackend) GetCapabilities() *backend.BackendCapabilities {
 	return &backend.BackendCapabilities{
 		Capabilities: []backend.BackendCapability{
 			backend.CapabilityObjectStorage,

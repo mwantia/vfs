@@ -1,4 +1,4 @@
-package local
+package direct
 
 import (
 	"context"
@@ -12,11 +12,11 @@ import (
 	"github.com/mwantia/vfs/data"
 )
 
-func (lb *LocalBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
+func (db *DirectBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	fullPath := lb.resolvePath(key)
+	fullPath := db.resolvePath(key)
 
 	if _, err := os.Stat(fullPath); err == nil {
 		return nil, data.ErrExist
@@ -43,11 +43,11 @@ func (lb *LocalBackend) CreateObject(ctx context.Context, namespace, key string,
 	}, file.Close()
 }
 
-func (lb *LocalBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
+func (db *DirectBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
-	fullPath := lb.resolvePath(key)
+	fullPath := db.resolvePath(key)
 
 	file, err := os.Open(fullPath)
 	if err != nil {
@@ -76,11 +76,11 @@ func (lb *LocalBackend) ReadObject(ctx context.Context, namespace, key string, o
 	return n, err
 }
 
-func (lb *LocalBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
+func (db *DirectBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	fullPath := lb.resolvePath(key)
+	fullPath := db.resolvePath(key)
 
 	// Open file for writing (O_RDWR to support both read and write)
 	file, err := os.OpenFile(fullPath, os.O_RDWR, 0644)
@@ -104,11 +104,11 @@ func (lb *LocalBackend) WriteObject(ctx context.Context, namespace, key string, 
 	return file.Write(dat)
 }
 
-func (lb *LocalBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
+func (db *DirectBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	fullPath := lb.resolvePath(key)
+	fullPath := db.resolvePath(key)
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -130,11 +130,11 @@ func (lb *LocalBackend) DeleteObject(ctx context.Context, namespace, key string,
 	return os.Remove(fullPath)
 }
 
-func (lb *LocalBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
+func (db *DirectBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
-	fullPath := lb.resolvePath(key)
+	fullPath := db.resolvePath(key)
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -149,7 +149,7 @@ func (lb *LocalBackend) ListObjects(ctx context.Context, namespace, key string) 
 
 	if !info.IsDir() {
 		return []*data.FileStat{
-			lb.toFileStat(key, info),
+			db.toFileStat(key, info),
 		}, nil
 	}
 
@@ -166,17 +166,17 @@ func (lb *LocalBackend) ListObjects(ctx context.Context, namespace, key string) 
 		}
 
 		childKey := filepath.Join(key, entry.Name())
-		stats = append(stats, lb.toFileStat(childKey, childInfo))
+		stats = append(stats, db.toFileStat(childKey, childInfo))
 	}
 
 	return stats, nil
 }
 
-func (lb *LocalBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
+func (db *DirectBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
-	fullPath := lb.resolvePath(key)
+	fullPath := db.resolvePath(key)
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -190,13 +190,13 @@ func (lb *LocalBackend) HeadObject(ctx context.Context, namespace, key string) (
 		return nil, err
 	}
 
-	return lb.toFileStat(key, info), nil
+	return db.toFileStat(key, info), nil
 }
 
-func (lb *LocalBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
+func (db *DirectBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	fullPath := lb.resolvePath(key)
+	fullPath := db.resolvePath(key)
 	return os.Truncate(fullPath, size)
 }

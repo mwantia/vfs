@@ -1,4 +1,4 @@
-package memory
+package ephemeral
 
 import (
 	"context"
@@ -8,31 +8,28 @@ import (
 
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/data/errors"
+	"github.com/mwantia/vfs/mount/backend"
 )
 
-func (mb *MemoryBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
-	mb.mu.Lock()
-	defer mb.mu.Unlock()
+func (eb *EphemeralBackend) CreateObject(ctx context.Context, namespace, key string, mode data.FileMode) (*data.FileStat, error) {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
 
 	// Check if path exists in B-tree
-	if _, exists := mb.keys.Get(key); exists {
+	nsKey := backend.NamespacedKey(namespace, key)
+	if _, exists := eb.keys.Get(nsKey); exists {
 		return nil, data.ErrExist
 	}
 
 	// Verify parent directory exists
 	parentKey := path.Dir(key)
 	if parentKey != "." && parentKey != "" {
-		parentID, exists := mb.keys.Get(parentKey)
-		if !exists {
+		parentMeta, err := eb.readMetaUnsafe(ctx, namespace, parentKey)
+		if err != nil {
 			return nil, data.ErrNotExist
 		}
 
-		parentMetadata, exists := mb.metadata[parentID]
-		if !exists {
-			return nil, data.ErrNotExist
-		}
-
-		if !parentMetadata.Mode.IsDir() {
+		if !parentMeta.Mode.IsDir() {
 			return nil, data.ErrNotDirectory
 		}
 	}
@@ -40,14 +37,14 @@ func (mb *MemoryBackend) CreateObject(ctx context.Context, namespace, key string
 	meta := data.NewFileMetadata(key, 0, mode)
 	stat := meta.ToStat()
 
-	return stat, mb.CreateMeta(ctx, namespace, meta)
+	return stat, eb.createMetaUnsafe(ctx, namespace, meta)
 }
 
-func (mb *MemoryBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
-	mb.mu.RLock()
-	defer mb.mu.RUnlock()
+func (eb *EphemeralBackend) ReadObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
 
-	meta, err := mb.ReadMeta(ctx, namespace, key)
+	meta, err := eb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return 0, err
 	}
@@ -60,7 +57,7 @@ func (mb *MemoryBackend) ReadObject(ctx context.Context, namespace, key string, 
 		return 0, io.EOF
 	}
 
-	buffer, exists := mb.datas[meta.ID]
+	buffer, exists := eb.datas[meta.ID]
 	if !exists {
 		return 0, nil
 	}
@@ -73,11 +70,11 @@ func (mb *MemoryBackend) ReadObject(ctx context.Context, namespace, key string, 
 	return n, nil
 }
 
-func (mb *MemoryBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
-	mb.mu.Lock()
-	defer mb.mu.Unlock()
+func (eb *EphemeralBackend) WriteObject(ctx context.Context, namespace, key string, offset int64, dat []byte) (int, error) {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
 
-	meta, err := mb.ReadMeta(ctx, namespace, key)
+	meta, err := eb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return 0, err
 	}
@@ -88,7 +85,7 @@ func (mb *MemoryBackend) WriteObject(ctx context.Context, namespace, key string,
 
 	writeEnd := offset + int64(len(dat))
 	// Get existing buffer or create new one
-	buffer, exists := mb.datas[meta.ID]
+	buffer, exists := eb.datas[meta.ID]
 	if !exists {
 		buffer = make([]byte, 0)
 	}
@@ -107,7 +104,7 @@ func (mb *MemoryBackend) WriteObject(ctx context.Context, namespace, key string,
 	copy(buffer[offset:], dat)
 
 	// Update storage
-	mb.datas[meta.ID] = buffer
+	eb.datas[meta.ID] = buffer
 	if writeEnd > meta.Size {
 		meta.Size = writeEnd
 	}
@@ -117,18 +114,18 @@ func (mb *MemoryBackend) WriteObject(ctx context.Context, namespace, key string,
 		Metadata: meta,
 	}
 
-	if err := mb.UpdateMeta(ctx, namespace, key, update); err != nil {
+	if err := eb.updateMetaUnsafe(ctx, namespace, key, update); err != nil {
 		return 0, err
 	}
 
 	return len(dat), nil
 }
 
-func (mb *MemoryBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
-	mb.mu.Lock()
-	defer mb.mu.Unlock()
+func (eb *EphemeralBackend) DeleteObject(ctx context.Context, namespace, key string, force bool) error {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
 
-	meta, err := mb.ReadMeta(ctx, namespace, key)
+	meta, err := eb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return err
 	}
@@ -139,19 +136,21 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, namespace, key string
 			return data.ErrIsDirectory
 		}
 
-		// Build prefix for children lookup
-		prefixKey := key
-		if prefixKey != "" {
-			prefixKey += "/"
+		// Build prefix for children lookup (using namespaced keys)
+		nsPrefixKey := backend.NamespacedKey(namespace, key)
+		if key != "" {
+			nsPrefixKey += "/"
 		}
 
 		// Collect all paths to delete (including this directory)
 		var keysToDelete []string
 		keysToDelete = append(keysToDelete, key)
 		// Use B-tree range scan to find all children
-		mb.keys.Scan(func(childPath string, _ string) bool {
-			if strings.HasPrefix(childPath, prefixKey) {
-				keysToDelete = append(keysToDelete, childPath)
+		eb.keys.Scan(func(nsChildPath string, _ string) bool {
+			if strings.HasPrefix(nsChildPath, nsPrefixKey) {
+				// Strip namespace to get actual key
+				childKey := strings.TrimPrefix(nsChildPath, namespace+":")
+				keysToDelete = append(keysToDelete, childKey)
 			}
 			// Continue scanning
 			return true
@@ -161,7 +160,7 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, namespace, key string
 
 		// Delete all collected paths
 		for _, delKey := range keysToDelete {
-			if err := mb.DeleteMeta(ctx, namespace, delKey); err != nil {
+			if err := eb.deleteMetaUnsafe(ctx, namespace, delKey); err != nil {
 				errs.Add(err)
 			}
 		}
@@ -169,16 +168,16 @@ func (mb *MemoryBackend) DeleteObject(ctx context.Context, namespace, key string
 		return errs.Errors()
 	}
 
-	return mb.DeleteMeta(ctx, namespace, key)
+	return eb.deleteMetaUnsafe(ctx, namespace, key)
 }
 
-func (mb *MemoryBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
-	mb.mu.RLock()
-	defer mb.mu.RUnlock()
+func (eb *EphemeralBackend) ListObjects(ctx context.Context, namespace, key string) ([]*data.FileStat, error) {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
 
 	// For root directory, skip the existence check - root is implicit
 	if key != "" {
-		meta, err := mb.ReadMeta(ctx, namespace, key)
+		meta, err := eb.readMetaUnsafe(ctx, namespace, key)
 		if err != nil {
 			return nil, err
 		}
@@ -191,34 +190,32 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, namespace, key string)
 		}
 	}
 
-	// For directories, use B-tree range scan to find children
-	prefixKey := key
-	if prefixKey != "" {
-		prefixKey += "/"
+	// For directories, use B-tree range scan to find children (using namespaced keys)
+	nsPrefixKey := backend.NamespacedKey(namespace, key)
+	if key != "" {
+		nsPrefixKey += "/"
 	}
-	prefixLen := len(prefixKey)
+	nsPrefixLen := len(nsPrefixKey)
 
 	// Use map to deduplicate direct children
 	children := make(map[string]*data.Metadata)
 	// B-tree range scan: iterate over all paths starting with prefix
-	mb.keys.Scan(func(childPath string, childID string) bool {
-		// Skip the directory itself
-		if childPath == key {
-			return true
-		}
-
-		// Check if this path is under our directory
-		if !strings.HasPrefix(childPath, prefixKey) {
+	eb.keys.Scan(func(nsChildPath string, childID string) bool {
+		// Check if this path is under our namespace and directory
+		if !strings.HasPrefix(nsChildPath, nsPrefixKey) {
 			return true // Continue scanning (paths are ordered)
 		}
 
-		// Get relative path
-		rel := childPath[prefixLen:]
+		// Get relative path (without namespace prefix)
+		rel := nsChildPath[nsPrefixLen:]
 
 		// Skip empty relative paths (shouldn't happen but be safe)
 		if rel == "" {
 			return true
 		}
+
+		// Strip namespace to get the actual child key
+		childKey := strings.TrimPrefix(nsChildPath, namespace+":")
 
 		// Check if this is a direct child (no slash in relative path)
 		if slashIdx := strings.IndexByte(rel, '/'); slashIdx > 0 {
@@ -226,20 +223,19 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, namespace, key string)
 			childName := rel[:slashIdx]
 			if _, seen := children[childName]; !seen {
 				// Look up the directory metadata
-				dirPath := prefixKey + childName
-				dirMeta, err := mb.ReadMeta(ctx, namespace, dirPath)
-				if err != nil {
-					print(err) // TODO :: This needs further finetuning - Do we just allow failed lookups?
-				} else {
+				dirKey := key
+				if dirKey != "" {
+					dirKey += "/"
+				}
+				dirKey += childName
+				dirMeta, err := eb.readMetaUnsafe(ctx, namespace, dirKey)
+				if err == nil {
 					children[childName] = dirMeta
 				}
-
 			}
 		} else {
-			childMeta, err := mb.ReadMeta(ctx, namespace, childPath)
-			if err != nil {
-				print(err) // TODO :: This needs further finetuning - Do we just allow failed lookups?
-			} else {
+			childMeta, err := eb.readMetaUnsafe(ctx, namespace, childKey)
+			if err == nil {
 				children[rel] = childMeta
 			}
 		}
@@ -257,11 +253,11 @@ func (mb *MemoryBackend) ListObjects(ctx context.Context, namespace, key string)
 	return result, nil
 }
 
-func (mb *MemoryBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
-	mb.mu.RLock()
-	defer mb.mu.RUnlock()
+func (eb *EphemeralBackend) HeadObject(ctx context.Context, namespace, key string) (*data.FileStat, error) {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
 
-	meta, err := mb.ReadMeta(ctx, namespace, key)
+	meta, err := eb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return nil, err
 	}
@@ -269,11 +265,11 @@ func (mb *MemoryBackend) HeadObject(ctx context.Context, namespace, key string) 
 	return meta.ToStat(), nil
 }
 
-func (mb *MemoryBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
-	mb.mu.Lock()
-	defer mb.mu.Unlock()
+func (eb *EphemeralBackend) TruncateObject(ctx context.Context, namespace, key string, size int64) error {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
 
-	meta, err := mb.ReadMeta(ctx, namespace, key)
+	meta, err := eb.readMetaUnsafe(ctx, namespace, key)
 	if err != nil {
 		return err
 	}
@@ -286,16 +282,16 @@ func (mb *MemoryBackend) TruncateObject(ctx context.Context, namespace, key stri
 		return nil // No changes needed
 	}
 
-	buffer, exists := mb.datas[meta.ID]
+	buffer, exists := eb.datas[meta.ID]
 	if exists {
 		if size < meta.Size {
 			// Shrink file
-			mb.datas[meta.ID] = buffer[:size]
+			eb.datas[meta.ID] = buffer[:size]
 		} else {
 			// Expand file with zeros
 			newData := make([]byte, size)
 			copy(newData, buffer)
-			mb.datas[meta.ID] = newData
+			eb.datas[meta.ID] = newData
 		}
 	}
 
@@ -306,5 +302,5 @@ func (mb *MemoryBackend) TruncateObject(ctx context.Context, namespace, key stri
 		Metadata: meta,
 	}
 
-	return mb.UpdateMeta(ctx, namespace, key, update)
+	return eb.updateMetaUnsafe(ctx, namespace, key, update)
 }
