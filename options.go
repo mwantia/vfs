@@ -1,8 +1,6 @@
 package vfs
 
-import (
-	"github.com/mwantia/vfs/log"
-)
+import "github.com/mwantia/vfs/log"
 
 type VirtualFileSystemOptions struct {
 	LogLevel      log.LogLevel

@@ -21,36 +21,15 @@ tasks:
         - task: init
         - go build ./...
 
-    build-race:
-        desc: Build with race detection
-        cmds:
-        - task: init
-        - go build -race ./...
-
     test:
+        desc: Run tests with race detection
+        cmds:
+        - go test -cover -v -race ./...
+
+    test-slim:
         desc: Run all tests
         cmds:
         - go test ./...
-
-    test-verbose:
-        desc: Run all tests with verbose output
-        cmds:
-        - go test -v ./...
-
-    test-race:
-        desc: Run tests with race detection
-        cmds:
-        - go test -race ./...
-
-    test-container:
-        desc: Run tests in container package only
-        cmds:
-        - go test ./container
-
-    test-coverage:
-        desc: Run tests with coverage report
-        cmds:
-        - go test -cover ./...
 
     test-coverage-html:
         desc: Generate HTML coverage report
@@ -84,5 +63,5 @@ tasks:
         desc: Run all CI checks (lint, test, build)
         cmds:
         - task: lint
-        - task: test-race
+        - task: test
         - task: build

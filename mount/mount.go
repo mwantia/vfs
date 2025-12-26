@@ -1,392 +1,349 @@
 package mount
 
 import (
-	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/mwantia/vfs/data"
-	"github.com/mwantia/vfs/data/errors"
-	"github.com/mwantia/vfs/log"
-	"github.com/mwantia/vfs/mount/backend"
-	"github.com/mwantia/vfs/mount/extension/acl"
-	"github.com/mwantia/vfs/mount/extension/cache"
-	"github.com/mwantia/vfs/mount/extension/encrypt"
-	"github.com/mwantia/vfs/mount/extension/multipart"
-	"github.com/mwantia/vfs/mount/extension/rubbish"
-	"github.com/mwantia/vfs/mount/extension/snapshot"
-	"github.com/mwantia/vfs/mount/extension/versioning"
+	"github.com/mwantia/vfs/context"
+	"github.com/mwantia/vfs/errors"
+	"github.com/mwantia/vfs/mount/extensions"
+	"github.com/mwantia/vfs/mount/service"
 )
 
-// MountInfo holds configuration and metadata towards the specified mount
 type Mount struct {
-	mu        sync.RWMutex
-	log       *log.Logger
-	streamers map[string]*MountStreamer
+	mu         sync.RWMutex
+	fstab      map[string]*Mount
+	uris       []string
+	createTime time.Time
 
-	Path        string
-	Options     *MountOptions
-	MountTime   time.Time // When the mount was created.
-	IsDualMount bool
+	MountPoint string
+	Options    *MountOptions
 
-	ObjectStorage backend.ObjectStorageBackend
-	Metadata      backend.MetadataBackend
-
-	ACL        acl.AclBackendExtension
-	Cache      cache.CacheBackendExtension
-	Encrypt    encrypt.EncryptBackendExtension
-	Multipart  multipart.MultipartBackendExtension
-	Rubbish    rubbish.RubbishBackendExtension
-	Snapshot   snapshot.SnapshotBackendExtension
-	Versioning versioning.VersioningBackendExtension
+	ObjectStorage service.ObjectStorageService
+	Metadata      service.MetadataService
+	Extensions    map[service.ServiceExtension]service.Service
 }
 
-func NewMountInfo(path string, log *log.Logger, primary backend.ObjectStorageBackend, opts ...MountOption) (*Mount, error) {
-	options := newDefaultMountOptions()
-	for _, opt := range opts {
-		if err := opt(options); err != nil {
-			return nil, err
-		}
-	}
-
-	mnt := &Mount{
-		log:       log,
-		streamers: make(map[string]*MountStreamer),
-
-		Path:          path,
-		Options:       options,
-		MountTime:     time.Now(),
-		ObjectStorage: primary,
-	}
-
-	caps := primary.GetCapabilities()
-
-	// Perform capability check for extension ACL
-	if ext, exists := options.Backends[backend.CapabilityACL]; exists {
-		// Type validation for interface
-		acl, ok := ext.(acl.AclBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for ACL backend", ext.Name())
-		}
-		mnt.ACL = acl
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilityACL) {
-		acl, ok := primary.(acl.AclBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for ACL backend", ext.Name())
-		}
-		mnt.ACL = acl
-	}
-	// Perform capability check for extension Cache
-	if ext, exists := options.Backends[backend.CapabilityCache]; exists {
-		// Type validation for interface
-		cache, ok := ext.(cache.CacheBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for Cache backend", ext.Name())
-		}
-		mnt.Cache = cache
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilityCache) {
-		cache, ok := primary.(cache.CacheBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for Cache backend", ext.Name())
-		}
-		mnt.Cache = cache
-	}
-	// Perform capability check for extension Encrypt
-	if ext, exists := options.Backends[backend.CapabilityEncrypt]; exists {
-		// Type validation for interface
-		encrypt, ok := ext.(encrypt.EncryptBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for Encrypt backend", ext.Name())
-		}
-		mnt.Encrypt = encrypt
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilityEncrypt) {
-		encrypt, ok := primary.(encrypt.EncryptBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for Encrypt backend", ext.Name())
-		}
-		mnt.Encrypt = encrypt
-	}
-	// Perform capability check for extension Metadata
-	if ext, exists := options.Backends[backend.CapabilityMetadata]; exists {
-		// Type validation for interface
-		metadata, ok := ext.(backend.MetadataBackend)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for Metadata backend", ext.Name())
-		}
-		mnt.Metadata = metadata
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilityMetadata) {
-		metadata, ok := primary.(backend.MetadataBackend)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for Metadata backend", primary.Name())
-		}
-		mnt.Metadata = metadata
-		// Set IsDualMount to true, since most operations need to be simplified
-		mnt.IsDualMount = true
-	}
-	// Perform capability check for extension Multipart
-	if ext, exists := options.Backends[backend.CapabilityMultipart]; exists {
-		// Type validation for interface
-		multipart, ok := ext.(multipart.MultipartBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for Multipart backend", ext.Name())
-		}
-		mnt.Multipart = multipart
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilityMultipart) {
-		multipart, ok := primary.(multipart.MultipartBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for Multipart backend", ext.Name())
-		}
-		mnt.Multipart = multipart
-	}
-	// Perform capability check for extension Namespace
-	/* if ext, exists := options.Backends[backend.CapabilityNamespace]; exists {
-		// Type validation for interface
-		namespace, ok := ext.(namespace.NamespaceBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for namespace backend", ext.Name())
-		}
-		mnt.Namespace = namespace
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilityNamespace) {
-		namespace, ok := primary.(namespace.NamespaceBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for namespace backend", ext.Name())
-		}
-		mnt.Namespace = namespace
-	} */
-	// Perform capability check for extension Rubbish
-	if ext, exists := options.Backends[backend.CapabilityRubbish]; exists {
-		// Type validation for interface
-		rubbish, ok := ext.(rubbish.RubbishBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for Rubbish backend", ext.Name())
-		}
-		mnt.Rubbish = rubbish
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilityRubbish) {
-		rubbish, ok := primary.(rubbish.RubbishBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for Rubbish backend", ext.Name())
-		}
-		mnt.Rubbish = rubbish
-	}
-	// Perform capability check for extension Snapshot
-	if ext, exists := options.Backends[backend.CapabilitySnapshot]; exists {
-		// Type validation for interface
-		snapshot, ok := ext.(snapshot.SnapshotBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for Snapshot backend", ext.Name())
-		}
-		mnt.Snapshot = snapshot
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilitySnapshot) {
-		snapshot, ok := primary.(snapshot.SnapshotBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for Snapshot backend", ext.Name())
-		}
-		mnt.Snapshot = snapshot
-	}
-	// Perform capability check for extension Versioning
-	if ext, exists := options.Backends[backend.CapabilityVersioning]; exists {
-		// Type validation for interface
-		versioning, ok := ext.(versioning.VersioningBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse extension '%s' for Versioning backend", ext.Name())
-		}
-		mnt.Versioning = versioning
-	} else if options.AutoExtensions && caps.Contains(backend.CapabilityVersioning) {
-		versioning, ok := primary.(versioning.VersioningBackendExtension)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse '%s' for Versioning backend", ext.Name())
-		}
-		mnt.Versioning = versioning
-	}
-
-	if !mnt.IsDualMount {
-		primaryAsMetadata, ok := primary.(backend.MetadataBackend)
-		// Additional fallback check and validation
-		// Occurs if primary and metadata are defined manually
-		if ok && primaryAsMetadata == mnt.Metadata {
-			mnt.IsDualMount = true
-		}
-	}
-
-	return mnt, nil
+type MountOptions struct {
+	Namespace  string
+	PathPrefix string
+	IsReadOnly bool
 }
 
-func (m *Mount) Mount(ctx context.Context) error {
+// Health returns the basic and fastest result to check the lifecycle and availablility of this Service.
+func (m *Mount) Health() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	m.log.Info("Mount: initializing mount")
-	m.log.Debug("Mount: opening %d unique backend(s)", len(m.getUniqueBackends()))
-
-	errs := errors.Errors{}
-	// Open all backends/extensions set to this mount
-	for _, vb := range m.getUniqueBackends() {
-		m.log.Debug("Mount: opening backend %s", vb.Name())
-		if err := vb.Open(ctx); err != nil {
-			m.log.Error("Mount: failed to open backend %s - %v", vb.Name(), err)
-			errs.Add(err)
-		} else {
-			m.log.Debug("Mount: successfully opened backend %s", vb.Name())
+	// Check object-storage (required) - must exist
+	if m.ObjectStorage == nil {
+		return false
+	}
+	// Check ObjectStorage health via Lifecycle
+	if lifecycle := m.ObjectStorage.GetLifecycle(); lifecycle != nil {
+		if ok, _ := lifecycle.Health(); !ok {
+			return false
 		}
 	}
 
-	if errs.Errors() != nil {
-		m.log.Error("Mount: mount initialization failed with errors")
-		return errs.Errors()
-	}
-
-	m.log.Info("Mount: mount initialized successfully")
-	return nil
-}
-
-func (m *Mount) Unmount(ctx context.Context, force bool) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	m.log.Info("Unmount: unmounting (force=%v)", force)
-	m.log.Debug("Unmount: checking %d active streamer(s)", len(m.streamers))
-
-	if !force {
-		// Initial check, to see if we have any busy streamers
-		for path, streamer := range m.streamers {
-			if streamer.IsBusy() {
-				m.log.Error("Unmount: streamer for %s is busy, cannot unmount", path)
-				// Fail, since we shouldn't unmount busy backends
-				return data.ErrBusy
+	// Check metadata (optional) - if exists, must be healthy
+	if m.Metadata != nil {
+		if lifecycle := m.Metadata.GetLifecycle(); lifecycle != nil {
+			if ok, _ := lifecycle.Health(); !ok {
+				return false
 			}
 		}
 	}
 
-	closedStreamers := 0
-	for path, streamer := range m.streamers {
-		if streamer.IsBusy() && !force {
-			m.log.Error("Unmount: streamer for %s is busy, cannot unmount", path)
-			return data.ErrBusy
-		} else {
-			m.log.Debug("Unmount: closing streamer for %s", path)
-			// Close the streamer
-			if err := streamer.Close(); err != nil {
-				m.log.Error("Unmount: failed to close streamer for %s - %v", path, err)
-				return err
+	// Check extensions (optional) - if exist, must be healthy
+	for _, extension := range m.Extensions {
+		if extension != nil {
+			if lifecycle := extension.GetLifecycle(); lifecycle != nil {
+				if ok, _ := lifecycle.Health(); !ok {
+					return false
+				}
 			}
-			closedStreamers++
 		}
 	}
 
-	if closedStreamers > 0 {
-		m.log.Debug("Unmount: closed %d streamer(s)", closedStreamers)
-	}
-
-	m.log.Debug("Unmount: closing %d unique backend(s)", len(m.getUniqueBackends()))
-	errs := errors.Errors{}
-	// Open all backends/extensions set to this mount
-	for _, vb := range m.getUniqueBackends() {
-		m.log.Debug("Unmount: closing backend %s", vb.Name())
-		if err := vb.Close(ctx); err != nil {
-			m.log.Error("Unmount: failed to close backend %s - %v", vb.Name(), err)
-			errs.Add(err)
-		} else {
-			m.log.Debug("Unmount: successfully closed backend %s", vb.Name())
-		}
-	}
-
-	if errs.Errors() != nil {
-		m.log.Error("Unmount: unmount failed with errors")
-		return errs.Errors()
-	}
-
-	m.log.Info("Unmount: unmount completed successfully")
-	return nil
+	// Mount is healthy
+	return true
 }
 
-func (m *Mount) GetStreamer(path string) (Streamer, bool) {
+// IsBusy checks if this mount or any of its services are currently busy.
+// Returns true if it's NOT safe to unmount (i.e., services are in use).
+func (m *Mount) IsBusy() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	streamer, exists := m.streamers[path]
-	if !exists {
-		m.log.Debug("GetStreamer: no existing streamer for %s", path)
-		return nil, false
+	// Check if ObjectStorage is busy
+	if m.ObjectStorage != nil {
+		if lifecycle := m.ObjectStorage.GetLifecycle(); lifecycle != nil {
+			if lifecycle.IsBusy() {
+				return true
+			}
+		}
 	}
 
-	m.log.Debug("GetStreamer: found existing streamer for %s", path)
-	return streamer, true
+	// Check if Metadata is busy
+	if m.Metadata != nil {
+		if lifecycle := m.Metadata.GetLifecycle(); lifecycle != nil {
+			if lifecycle.IsBusy() {
+				return true
+			}
+		}
+	}
+
+	// Check if any extension is busy
+	for _, ext := range m.Extensions {
+		if ext != nil {
+			if lifecycle := ext.GetLifecycle(); lifecycle != nil {
+				if lifecycle.IsBusy() {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
-func (m *Mount) OpenStreamer(ctx context.Context, path string, offset int64, flags data.AccessMode) Streamer {
+// Shutdown unmounts all mounted filesystems and releases all resources.
+// This should be called when shutting down the VFS to ensure proper cleanup.
+// Mounts are unmounted in reverse order (deepest first) to avoid dependency issues.
+func (m *Mount) Shutdown(traversal context.TraversalContext) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.log.Debug("OpenStreamer: creating new streamer for %s (offset=%d flags=%v)", path, offset, flags)
+	// Collect all mount paths and sort them by depth (deepest first)
+	var paths []string
+	for path := range m.fstab {
+		paths = append(paths, path)
+	}
+	// Sort by length (longer paths are deeper in the tree)
+	for i := 0; i < len(paths); i++ {
+		for j := i + 1; j < len(paths); j++ {
+			if len(paths[j]) > len(paths[i]) {
+				paths[i], paths[j] = paths[j], paths[i]
+			}
+		}
+	}
+	// Unmount all child filesystems
+	var lastErr error
+	for _, path := range paths {
+		if mount, exists := m.fstab[path]; exists {
+			if err := mount.Shutdown(traversal); err != nil {
+				lastErr = err
+				// Continue trying to unmount others even if one fails
+			}
+			delete(m.fstab, path)
+		}
+	}
 
-	log := m.log.Named("streamer")
-	streamer := newMountStreamer(ctx, log, m, path, offset, flags)
+	// Release all driver references (this will call CloseDriver when refcount reaches 0)
+	// Services are wrappers around drivers, so we don't need to close them explicitly
+	for _, uri := range m.uris {
+		if err := service.ReleaseDriver(traversal, uri); err != nil && lastErr == nil {
+			lastErr = err
+		}
+	}
 
-	m.streamers[path] = streamer
-	m.log.Debug("OpenStreamer: streamer created (total active=%d)", len(m.streamers))
+	// Clear service references
+	m.uris = nil
+	m.ObjectStorage = nil
+	m.Metadata = nil
+	m.Extensions = nil
 
-	return streamer
+	return lastErr
 }
 
-func (m *Mount) CloseStreamer(ctx context.Context, path string, force bool) error {
+// Mount attaches a filesystem handler at the specified path.
+// Options can be used to configure the mount (e.g., read-only).
+func (m *Mount) Mount(traversal context.TraversalContext, steps ...BuildStep) error {
+	//
+	if match, mount, mountTraversal := m.resolve(traversal); match {
+		return mount.Mount(mountTraversal, steps...)
+	}
+	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.log.Debug("CloseStreamer: closing streamer for %s (force=%v)", path, force)
+	relative := traversal.RelativePath()
+	// Build the mount
+	mounter, err := BuildMounter(steps...)
+	if err != nil {
+		return fmt.Errorf("failed to build mounter: %v", err)
+	}
 
-	streamer, exists := m.streamers[path]
+	mount, err := mounter.Build(traversal, relative)
+	if err != nil {
+		return fmt.Errorf("failed to build mountpoint: %v", err)
+	}
+
+	// Add to fstab
+	m.fstab[relative] = mount
+	// Persist via MountExtension if available
+	if ext, ok := m.Extensions[service.ServiceExtensionMount]; ok {
+		if mountExt, ok := ext.(extensions.MountExtension); ok {
+			spec := mounter.ToSpec()
+			if err := mountExt.SaveMount(traversal, spec); err != nil {
+				// Rollback: remove from fstab
+				delete(m.fstab, relative)
+				return fmt.Errorf("failed to persist mount: %v", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// Unmount removes the filesystem handler at the specified path.
+// Returns an error if the path is not mounted or has child mounts.
+func (m *Mount) Unmount(traversal context.TraversalContext, force bool) error {
+	//
+	if match, mount, mountTraversal := m.resolve(traversal); match {
+		return mount.Unmount(mountTraversal, force)
+	}
+	// Only lock after checks for traversing submounts is done.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	relative := traversal.RelativePath()
+	mount, exists := m.fstab[relative]
 	if !exists {
-		m.log.Error("CloseStreamer: no streamer found for %s", path)
-		return data.ErrNotExist
+		return errors.ErrPathNotMounted
 	}
 
-	if streamer.IsBusy() && !force {
-		m.log.Error("CloseStreamer: streamer for %s is busy", path)
-		return data.ErrBusy
+	// Check if mount is busy (unless forced)
+	if !force && mount.IsBusy() {
+		return errors.ErrMountBusy
+	}
+	// Check for child mounts in the mount's own fstab
+	if !force && len(mount.fstab) > 0 {
+		return errors.ErrMountBusy
 	}
 
-	if err := streamer.Close(); err != nil {
-		m.log.Error("CloseStreamer: failed to close streamer for %s - %v", path, err)
+	if err := mount.Shutdown(traversal); err != nil {
 		return err
 	}
+	// Delete persisted mount spec via MountExtension if available
+	if ext, ok := m.Extensions[service.ServiceExtensionMount]; ok {
+		if mountExt, ok := ext.(extensions.MountExtension); ok {
+			// Best effort deletion - mount is already unmounted
+			// so we don't want to fail the operation if persistence deletion fails
+			if err := mountExt.DeleteMount(traversal); err != nil {
+				return err
+			}
+			// Remove from fstab
+			delete(m.fstab, relative)
+		}
+	} else {
+		// Remove from fstab
+		delete(m.fstab, relative)
+	}
 
-	m.log.Debug("CloseStreamer: streamer closed successfully (remaining active=%d)", len(m.streamers)-1)
 	return nil
 }
 
-// getUniqueBackends returns a list of unique backends without duplicates
-func (m *Mount) getUniqueBackends() []backend.Backend {
-	// Create list of all available backends
-	backends := []backend.Backend{
-		m.ObjectStorage,
-		m.ACL,
-		m.Cache,
-		m.Encrypt,
-		m.Metadata,
-		// m.Namespace,
-		m.Multipart,
-		m.Rubbish,
-		m.Snapshot,
-		m.Versioning,
-	}
-	// Use map to track unique backend pointers
-	seen := make(map[backend.Backend]struct{})
-	// Helper to add backend if not nil and not already seen
-	addBackend := func(b backend.Backend) {
-		if b != nil {
-			seen[b] = struct{}{}
+// RestoreMounts rebuilds the fstab from persisted mount specifications.
+// This is called during mount initialization (e.g., after VFS restart).
+// It uses the MountExtension (like /etc/fstab) to retrieve all saved mounts
+// and re-mounts them.
+func (m *Mount) RestoreMounts(traversal context.TraversalContext) error {
+	// Check if we have mount extension
+	if ext, ok := m.Extensions[service.ServiceExtensionMount]; ok {
+		if mountExt, ok := ext.(extensions.MountExtension); ok {
+			// List all persisted mount specs
+			specs, err := mountExt.ListMounts(traversal)
+			if err != nil {
+				return fmt.Errorf("failed to list persisted mounts: %v", err)
+			}
+			// Restore each mount
+			for _, specInterface := range specs {
+				// Cast back to *MountSpec
+				spec, ok := specInterface.(*MountSpec)
+				if !ok {
+					continue // Skip invalid specs
+				}
+				// Convert spec to BuildSteps
+				steps, err := spec.ToSteps()
+				if err != nil {
+					// Log but continue with other mounts
+					continue
+				}
+				// Mount using the persisted configuration
+				// Note: This will NOT call SaveMount again since the spec is already persisted
+				// We need to prevent double-saving
+				if err := m.restoreMount(traversal, steps); err != nil {
+					// Log but continue with other mounts
+					continue
+				}
+			}
 		}
 	}
-	// Collect all backends
-	for _, backend := range backends {
-		addBackend(backend)
-	}
-	// Convert map keys to slice
-	uniques := make([]backend.Backend, 0, len(seen))
-	for b := range seen {
-		uniques = append(uniques, b)
+
+	return nil
+}
+
+// restoreMount is like Mount() but skips persistence (used during restoration)
+func (m *Mount) restoreMount(traversal context.TraversalContext, steps []BuildStep) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	relative := traversal.RelativePath()
+	// Build the mount
+	mounter, err := BuildMounter(steps...)
+	if err != nil {
+		return fmt.Errorf("failed to build mounter: %v", err)
 	}
 
-	return uniques
+	mount, err := mounter.Build(traversal, relative)
+	if err != nil {
+		return fmt.Errorf("failed to build mountpoint: %v", err)
+	}
+	// Add to fstab (don't persist - it's already persisted)
+	m.fstab[relative] = mount
+
+	return nil
+}
+
+// isReadonly
+func (m *Mount) isReadonly() bool {
+	return m.Options.IsReadOnly
+}
+
+// resolve
+func (m *Mount) resolve(traversal context.TraversalContext) (bool, MountPoint, context.TraversalContext) {
+	// Ignore empty or direct relative paths,
+	// these are handled locally
+	relative := traversal.RelativePath()
+	if relative != "" && relative != "/" {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+
+		var bestMatch MountPoint
+		var bestPrefix string
+
+		for path, mount := range m.fstab {
+			// Normalize paths for comparison
+			normalizedPath := strings.Trim(path, "/")
+			normalizedRelative := strings.Trim(relative, "/")
+			// Check if mountpath is a matching prefix
+			if normalizedRelative == normalizedPath || strings.HasPrefix(normalizedRelative, normalizedPath+"/") {
+				// Keep the longest match
+				if len(normalizedPath) > len(bestPrefix) {
+					bestMatch = mount
+					bestPrefix = normalizedPath
+				}
+			}
+		}
+		// Found a matching submount to traverse to
+		if bestPrefix != "" {
+			return true, bestMatch, traversal.Traverse(bestPrefix)
+		}
+	}
+	// No submount found, handle locally
+	return false, m, traversal
 }

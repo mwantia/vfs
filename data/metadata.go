@@ -9,6 +9,7 @@ type FileType string
 
 const (
 	FileTypeDir       FileType = "directory"
+	FileTypeMount     FileType = "mount"
 	FileTypeSymlink   FileType = "symlink"
 	FileTypeNamedPipe FileType = "namedpipe"
 	FileTypeSocket    FileType = "socket"
@@ -76,6 +77,8 @@ func (m *Metadata) ToStat() *FileStat {
 // GetType returns the filetype defined to this metadata
 func (m *Metadata) GetType() FileType {
 	switch {
+	case m.Mode.IsMount():
+		return FileTypeMount
 	case m.Mode.IsDir():
 		return FileTypeDir
 	case m.Mode.IsSymlink():
