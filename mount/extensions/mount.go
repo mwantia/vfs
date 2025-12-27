@@ -1,12 +1,11 @@
 package extensions
 
 import (
-	"github.com/mwantia/vfs/context"
+	"context"
+
+	"github.com/mwantia/vfs/mount/builder"
 	"github.com/mwantia/vfs/mount/service"
 )
-
-// MountSpec is forward-declared to avoid import cycle
-type MountSpec any
 
 // MountExtension provides persistent mount management capabilities.
 // Services implementing this interface can persist mount configurations
@@ -21,17 +20,17 @@ type MountExtension interface {
 
 	// SaveMount persists a mount specification at the given path.
 	// The spec contains all configuration needed to rebuild the mount.
-	SaveMount(traversal context.TraversalContext, spec MountSpec) error
+	SaveMount(ctx context.Context, path string, spec builder.MountSpecifications) error
 
 	// LoadMount retrieves a persisted mount specification for the given path.
 	// Returns error if no mount spec exists at the path.
-	LoadMount(traversal context.TraversalContext) (MountSpec, error)
+	LoadMount(ctx context.Context, path string) (builder.MountSpecifications, error)
 
 	// DeleteMount removes a persisted mount specification.
 	// This is called when unmounting to clean up persistence.
-	DeleteMount(traversal context.TraversalContext) error
+	DeleteMount(ctx context.Context, path string) error
 
 	// ListMounts returns all persisted mount specifications.
 	// The Mount struct uses this to rebuild its fstab on initialization.
-	ListMounts(traversal context.TraversalContext) ([]MountSpec, error)
+	ListMounts(ctx context.Context) (map[string]builder.MountSpecifications, error)
 }

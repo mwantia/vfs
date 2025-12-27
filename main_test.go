@@ -9,7 +9,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/mwantia/vfs"
-	"github.com/mwantia/vfs/mount"
+	"github.com/mwantia/vfs/mount/builder"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -18,16 +18,16 @@ type TestServiceFactory func(ctx context.Context, vfs vfs.VirtualFileSystem) err
 
 var Factories = map[string]TestServiceFactory{
 	"ephemeral-object-storage-only": func(ctx context.Context, vfs vfs.VirtualFileSystem) error {
-		return vfs.Mount(ctx, "/", mount.WithObjectStorage("ephemeral://"))
+		return vfs.Mount(ctx, "/", builder.WithObjectStorage("ephemeral://"))
 	},
 	"ephemeral-object-storage-metadata": func(ctx context.Context, vfs vfs.VirtualFileSystem) error {
-		return vfs.Mount(ctx, "/", mount.WithObjectStorage("ephemeral://"), mount.WithMetadata("ephemeral://"))
+		return vfs.Mount(ctx, "/", builder.WithObjectStorage("ephemeral://"), builder.WithMetadata("ephemeral://"))
 	},
 	"sqlite-memory-object-storage-only": func(ctx context.Context, vfs vfs.VirtualFileSystem) error {
-		return vfs.Mount(ctx, "/", mount.WithObjectStorage("sqlite://"))
+		return vfs.Mount(ctx, "/", builder.WithObjectStorage("sqlite://"))
 	},
 	"sqlite-memory-object-storage-metadata": func(ctx context.Context, vfs vfs.VirtualFileSystem) error {
-		return vfs.Mount(ctx, "/", mount.WithObjectStorage("sqlite://"), mount.WithMetadata("sqlite://"))
+		return vfs.Mount(ctx, "/", builder.WithObjectStorage("sqlite://"), builder.WithMetadata("sqlite://"))
 	},
 }
 
@@ -65,10 +65,10 @@ func TestMain(m *testing.M) {
 	// Build Consul URI
 	consulURI := fmt.Sprintf("consul://%s:%s", consulHost, consulPort.Port())
 	Factories["consul-object-storage-only"] = func(ctx context.Context, vfs vfs.VirtualFileSystem) error {
-		return vfs.Mount(ctx, "/", mount.WithObjectStorage(consulURI))
+		return vfs.Mount(ctx, "/", builder.WithObjectStorage(consulURI))
 	}
 	Factories["consul-object-storage-ephemeral-metadata"] = func(ctx context.Context, vfs vfs.VirtualFileSystem) error {
-		return vfs.Mount(ctx, "/", mount.WithObjectStorage(consulURI), mount.WithMetadata("ephemeral://"))
+		return vfs.Mount(ctx, "/", builder.WithObjectStorage(consulURI), builder.WithMetadata("ephemeral://"))
 	}
 
 	// Start MinIO container for S3 tests
@@ -127,12 +127,12 @@ func TestMain(m *testing.M) {
 	}
 
 	// Build S3 URI
-	s3URI := fmt.Sprintf("s3://%s:%s/%s?accesskey=minioadmin&secretkey=minioadmin", minioHost, minioPort.Port(), bucketName)
+	s3URI := fmt.Sprintf("s3://minioadmin:minioadmin@%s:%s/%s", minioHost, minioPort.Port(), bucketName)
 	Factories["s3-object-storage-only"] = func(ctx context.Context, vfs vfs.VirtualFileSystem) error {
-		return vfs.Mount(ctx, "/", mount.WithObjectStorage(s3URI))
+		return vfs.Mount(ctx, "/", builder.WithObjectStorage(s3URI))
 	}
 	Factories["s3-object-storage-ephemeral-metadata"] = func(ctx context.Context, vfs vfs.VirtualFileSystem) error {
-		return vfs.Mount(ctx, "/", mount.WithObjectStorage(s3URI), mount.WithMetadata("ephemeral://"))
+		return vfs.Mount(ctx, "/", builder.WithObjectStorage(s3URI), builder.WithMetadata("ephemeral://"))
 	}
 
 	// Run tests

@@ -1,12 +1,12 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 
-	"github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
-	"github.com/mwantia/vfs/mount/extensions"
+	"github.com/mwantia/vfs/mount/builder"
 	"github.com/mwantia/vfs/mount/service"
 )
 
@@ -16,53 +16,47 @@ func (s *SqliteMountExtensionService) GetLifecycle() service.Lifecycle {
 
 // SaveMount persists a mount specification at the given path.
 // The spec contains all configuration needed to rebuild the mount.
-func (s *SqliteMountExtensionService) SaveMount(traversal context.TraversalContext, spec extensions.MountSpec) error {
+func (s *SqliteMountExtensionService) SaveMount(ctx context.Context, path string, spec builder.MountSpecifications) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Get the mount path from traversal context
-	path := traversal.AbsolutePath()
-
 	// Serialize MountSpec to JSON
-	specJSON, err := json.Marshal(spec)
+	buf, err := json.Marshal(spec)
 	if err != nil {
 		return err
 	}
 
 	// Insert or replace mount spec in database
-	_, err = s.driver.db.ExecContext(traversal, `
-		INSERT OR REPLACE INTO vfs_mounts (path, spec)
-		VALUES (?, ?)
-	`, path, string(specJSON))
+	_, err = s.driver.db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO vfs_mounts (path, object_storage, metadata, spec)
+		VALUES (?, ?, ?, ?)
+	`, path, spec.ObjectStorage, spec.Metadata, string(buf))
 
 	return err
 }
 
 // LoadMount retrieves a persisted mount specification for the given path.
 // Returns error if no mount spec exists at the path.
-func (s *SqliteMountExtensionService) LoadMount(traversal context.TraversalContext) (extensions.MountSpec, error) {
+func (s *SqliteMountExtensionService) LoadMount(ctx context.Context, path string) (builder.MountSpecifications, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
-	// Get the mount path from traversal context
-	path := traversal.AbsolutePath()
-
 	// Query mount spec from database
-	var specJSON string
-	err := s.driver.db.QueryRowContext(traversal,
-		"SELECT spec FROM vfs_mounts WHERE path = ?", path).Scan(&specJSON)
+	var scanSpec string
+	err := s.driver.db.QueryRowContext(ctx,
+		"SELECT spec FROM vfs_mounts WHERE path = ?", path).Scan(&scanSpec)
 
 	if err == sql.ErrNoRows {
-		return nil, data.ErrNotExist
+		return builder.MountSpecifications{}, data.ErrNotExist
 	}
 	if err != nil {
-		return nil, err
+		return builder.MountSpecifications{}, err
 	}
 
 	// Deserialize JSON to MountSpec
-	var spec extensions.MountSpec
-	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
-		return nil, err
+	var spec builder.MountSpecifications
+	if err := json.Unmarshal([]byte(scanSpec), &spec); err != nil {
+		return builder.MountSpecifications{}, err
 	}
 
 	return spec, nil
@@ -70,15 +64,11 @@ func (s *SqliteMountExtensionService) LoadMount(traversal context.TraversalConte
 
 // DeleteMount removes a persisted mount specification.
 // This is called when unmounting to clean up persistence.
-func (s *SqliteMountExtensionService) DeleteMount(traversal context.TraversalContext) error {
+func (s *SqliteMountExtensionService) DeleteMount(ctx context.Context, path string) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
-
-	// Get the mount path from traversal context
-	path := traversal.AbsolutePath()
-
 	// Delete mount spec from database
-	_, err := s.driver.db.ExecContext(traversal,
+	_, err := s.driver.db.ExecContext(ctx,
 		"DELETE FROM vfs_mounts WHERE path = ?", path)
 
 	return err
@@ -86,33 +76,32 @@ func (s *SqliteMountExtensionService) DeleteMount(traversal context.TraversalCon
 
 // ListMounts returns all persisted mount specifications.
 // The Mount struct uses this to rebuild its fstab on initialization.
-func (s *SqliteMountExtensionService) ListMounts(traversal context.TraversalContext) ([]extensions.MountSpec, error) {
+func (s *SqliteMountExtensionService) ListMounts(ctx context.Context) (map[string]builder.MountSpecifications, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	// Query all mount specs from database
-	rows, err := s.driver.db.QueryContext(traversal,
-		"SELECT spec FROM vfs_mounts ORDER BY path")
+	rows, err := s.driver.db.QueryContext(ctx,
+		"SELECT path, spec FROM vfs_mounts ORDER BY path")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	// Deserialize each spec
-	specs := make([]extensions.MountSpec, 0)
+	specs := make(map[string]builder.MountSpecifications)
 	for rows.Next() {
-		var specJSON string
-		if err := rows.Scan(&specJSON); err != nil {
+		var path, specJSON string
+		if err := rows.Scan(&path, &specJSON); err != nil {
 			return nil, err
 		}
 
-		var spec extensions.MountSpec
+		var spec builder.MountSpecifications
 		if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 			// Skip invalid specs
 			continue
 		}
 
-		specs = append(specs, spec)
+		specs[path] = spec
 	}
 
 	if err := rows.Err(); err != nil {

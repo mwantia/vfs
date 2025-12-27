@@ -1,10 +1,10 @@
 package ephemeral
 
 import (
+	"context"
 	"strings"
 	"time"
 
-	"github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -13,7 +13,7 @@ func (s *EphemeralMetadataService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (ems *EphemeralMetadataService) CreateMeta(traversal context.TraversalContext, ns string, meta *data.Metadata) error {
+func (ems *EphemeralMetadataService) CreateMeta(ctx context.Context, ns string, meta *data.Metadata) error {
 	ems.driver.mu.Lock()
 	defer ems.driver.mu.Unlock()
 
@@ -53,7 +53,7 @@ func (ems *EphemeralMetadataService) CreateMeta(traversal context.TraversalConte
 	return nil
 }
 
-func (ems *EphemeralMetadataService) ReadMeta(traversal context.TraversalContext, ns, key string) (*data.Metadata, error) {
+func (ems *EphemeralMetadataService) ReadMeta(ctx context.Context, ns, key string) (*data.Metadata, error) {
 	ems.driver.mu.RLock()
 	defer ems.driver.mu.RUnlock()
 
@@ -68,7 +68,7 @@ func (ems *EphemeralMetadataService) ReadMeta(traversal context.TraversalContext
 	return meta, nil
 }
 
-func (ems *EphemeralMetadataService) UpdateMeta(traversal context.TraversalContext, ns, key string, update *data.MetadataUpdate) error {
+func (ems *EphemeralMetadataService) UpdateMeta(ctx context.Context, ns, key string, update *data.MetadataUpdate) error {
 	ems.driver.mu.Lock()
 	defer ems.driver.mu.Unlock()
 
@@ -86,7 +86,7 @@ func (ems *EphemeralMetadataService) UpdateMeta(traversal context.TraversalConte
 	return nil
 }
 
-func (ems *EphemeralMetadataService) DeleteMeta(traversal context.TraversalContext, ns, key string) error {
+func (ems *EphemeralMetadataService) DeleteMeta(ctx context.Context, ns, key string) error {
 	ems.driver.mu.Lock()
 	defer ems.driver.mu.Unlock()
 
@@ -130,7 +130,7 @@ func (ems *EphemeralMetadataService) DeleteMeta(traversal context.TraversalConte
 	return nil
 }
 
-func (ems *EphemeralMetadataService) ExistsMeta(traversal context.TraversalContext, ns, key string) (bool, error) {
+func (ems *EphemeralMetadataService) ExistsMeta(ctx context.Context, ns, key string) (bool, error) {
 	ems.driver.mu.RLock()
 	defer ems.driver.mu.RUnlock()
 
@@ -138,7 +138,7 @@ func (ems *EphemeralMetadataService) ExistsMeta(traversal context.TraversalConte
 	return exists, nil
 }
 
-func (ems *EphemeralMetadataService) QueryMeta(traversal context.TraversalContext, ns string, query *service.Query) (*service.QueryPagination, error) {
+func (ems *EphemeralMetadataService) QueryMeta(ctx context.Context, ns string, query *service.Query) (*service.QueryPagination, error) {
 	ems.driver.mu.RLock()
 	defer ems.driver.mu.RUnlock()
 

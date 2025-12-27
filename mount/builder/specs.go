@@ -1,4 +1,4 @@
-package mount
+package builder
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"github.com/mwantia/vfs/mount/service"
 )
 
-type MountSpec struct {
+type MountSpecifications struct {
 	ObjectStorage string                              `json:"object_storage"`
 	Metadata      string                              `json:"metadata"`
 	Extensions    map[service.ServiceExtension]string `json:"extensions"`
@@ -15,9 +15,8 @@ type MountSpec struct {
 
 // ToSteps converts a MountSpec to BuildSteps.
 // This is used when restoring mounts from persisted specifications.
-func (ms *MountSpec) ToSteps() ([]BuildStep, error) {
-	steps := make([]BuildStep, 0)
-
+func (ms *MountSpecifications) ToMountSteps() ([]MountStep, error) {
+	steps := make([]MountStep, 0)
 	// Add object storage (required)
 	if ms.ObjectStorage != "" {
 		steps = append(steps, WithObjectStorage(ms.ObjectStorage))

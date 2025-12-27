@@ -1,13 +1,15 @@
 package mount
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/mwantia/vfs/context"
+	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/errors"
+	"github.com/mwantia/vfs/mount/builder"
 	"github.com/mwantia/vfs/mount/extensions"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -113,7 +115,7 @@ func (m *Mount) IsBusy() bool {
 // Shutdown unmounts all mounted filesystems and releases all resources.
 // This should be called when shutting down the VFS to ensure proper cleanup.
 // Mounts are unmounted in reverse order (deepest first) to avoid dependency issues.
-func (m *Mount) Shutdown(traversal context.TraversalContext) error {
+func (m *Mount) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -134,7 +136,7 @@ func (m *Mount) Shutdown(traversal context.TraversalContext) error {
 	var lastErr error
 	for _, path := range paths {
 		if mount, exists := m.fstab[path]; exists {
-			if err := mount.Shutdown(traversal); err != nil {
+			if err := mount.Shutdown(ctx); err != nil {
 				lastErr = err
 				// Continue trying to unmount others even if one fails
 			}
@@ -145,7 +147,7 @@ func (m *Mount) Shutdown(traversal context.TraversalContext) error {
 	// Release all driver references (this will call CloseDriver when refcount reaches 0)
 	// Services are wrappers around drivers, so we don't need to close them explicitly
 	for _, uri := range m.uris {
-		if err := service.ReleaseDriver(traversal, uri); err != nil && lastErr == nil {
+		if err := service.ReleaseDriver(ctx, uri); err != nil && lastErr == nil {
 			lastErr = err
 		}
 	}
@@ -161,36 +163,34 @@ func (m *Mount) Shutdown(traversal context.TraversalContext) error {
 
 // Mount attaches a filesystem handler at the specified path.
 // Options can be used to configure the mount (e.g., read-only).
-func (m *Mount) Mount(traversal context.TraversalContext, steps ...BuildStep) error {
+func (m *Mount) Mount(ctx context.Context, path string, steps ...builder.MountStep) error {
 	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.Mount(mountTraversal, steps...)
+	if mount, mountpoint := m.resolveMountPoint(ctx, path); path != mountpoint {
+		return mount.Mount(ctx, mountpoint)
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	relative := traversal.RelativePath()
 	// Build the mount
-	mounter, err := BuildMounter(steps...)
+	mounter, err := builder.BuildMounter(steps...)
 	if err != nil {
 		return fmt.Errorf("failed to build mounter: %v", err)
 	}
 
-	mount, err := mounter.Build(traversal, relative)
+	mount, err := BuildMount(ctx, path, mounter)
 	if err != nil {
 		return fmt.Errorf("failed to build mountpoint: %v", err)
 	}
 
 	// Add to fstab
-	m.fstab[relative] = mount
+	m.fstab[path] = mount
 	// Persist via MountExtension if available
 	if ext, ok := m.Extensions[service.ServiceExtensionMount]; ok {
 		if mountExt, ok := ext.(extensions.MountExtension); ok {
-			spec := mounter.ToSpec()
-			if err := mountExt.SaveMount(traversal, spec); err != nil {
+			spec := mounter.ToMountSpec()
+			if err := mountExt.SaveMount(ctx, path, spec); err != nil {
 				// Rollback: remove from fstab
-				delete(m.fstab, relative)
+				delete(m.fstab, path)
 				return fmt.Errorf("failed to persist mount: %v", err)
 			}
 		}
@@ -201,17 +201,16 @@ func (m *Mount) Mount(traversal context.TraversalContext, steps ...BuildStep) er
 
 // Unmount removes the filesystem handler at the specified path.
 // Returns an error if the path is not mounted or has child mounts.
-func (m *Mount) Unmount(traversal context.TraversalContext, force bool) error {
+func (m *Mount) Unmount(ctx context.Context, path string, force bool) error {
 	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.Unmount(mountTraversal, force)
+	if mount, mountpoint := m.resolveMountPoint(ctx, path); path != mountpoint {
+		return mount.Unmount(ctx, mountpoint, force)
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	relative := traversal.RelativePath()
-	mount, exists := m.fstab[relative]
+	mount, exists := m.fstab[path]
 	if !exists {
 		return errors.ErrPathNotMounted
 	}
@@ -225,87 +224,77 @@ func (m *Mount) Unmount(traversal context.TraversalContext, force bool) error {
 		return errors.ErrMountBusy
 	}
 
-	if err := mount.Shutdown(traversal); err != nil {
+	if err := mount.Shutdown(ctx); err != nil {
 		return err
 	}
 	// Delete persisted mount spec via MountExtension if available
 	if ext, ok := m.Extensions[service.ServiceExtensionMount]; ok {
-		if mountExt, ok := ext.(extensions.MountExtension); ok {
+		if mount, ok := ext.(extensions.MountExtension); ok {
 			// Best effort deletion - mount is already unmounted
 			// so we don't want to fail the operation if persistence deletion fails
-			if err := mountExt.DeleteMount(traversal); err != nil {
+			if err := mount.DeleteMount(ctx, path); err != nil {
 				return err
 			}
 			// Remove from fstab
-			delete(m.fstab, relative)
+			delete(m.fstab, path)
 		}
 	} else {
 		// Remove from fstab
-		delete(m.fstab, relative)
+		delete(m.fstab, path)
 	}
 
 	return nil
 }
 
-// RestoreMounts rebuilds the fstab from persisted mount specifications.
-// This is called during mount initialization (e.g., after VFS restart).
-// It uses the MountExtension (like /etc/fstab) to retrieve all saved mounts
-// and re-mounts them.
-func (m *Mount) RestoreMounts(traversal context.TraversalContext) error {
-	// Check if we have mount extension
+func (m *Mount) Restore(ctx context.Context) error {
+	errs := errors.Errors{}
+
 	if ext, ok := m.Extensions[service.ServiceExtensionMount]; ok {
-		if mountExt, ok := ext.(extensions.MountExtension); ok {
-			// List all persisted mount specs
-			specs, err := mountExt.ListMounts(traversal)
+		if mount, ok := ext.(extensions.MountExtension); ok {
+			// List all persisted mount specifications
+			specs, err := mount.ListMounts(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to list persisted mounts: %v", err)
 			}
-			// Restore each mount
-			for _, specInterface := range specs {
-				// Cast back to *MountSpec
-				spec, ok := specInterface.(*MountSpec)
-				if !ok {
-					continue // Skip invalid specs
-				}
-				// Convert spec to BuildSteps
-				steps, err := spec.ToSteps()
-				if err != nil {
-					// Log but continue with other mounts
+			// Restore each spec to mount
+			for path, spec := range specs {
+				// Skip any invalid specs
+				if path == "" {
 					continue
 				}
-				// Mount using the persisted configuration
-				// Note: This will NOT call SaveMount again since the spec is already persisted
-				// We need to prevent double-saving
-				if err := m.restoreMount(traversal, steps); err != nil {
-					// Log but continue with other mounts
+				// Convert spec into mountsteps
+				steps, err := spec.ToMountSteps()
+				if err != nil {
+					errs.Add(fmt.Errorf("failed to parse mount steps for '%s': %v", path, err))
+					continue
+				}
+				// Mount steps using the persisted configuration and path
+				if err := m.restoreMountPoint(ctx, path, steps...); err != nil {
+					errs.Add(fmt.Errorf("failed to restore mountpoint for '%s': %v", path, err))
 					continue
 				}
 			}
 		}
 	}
 
-	return nil
+	return errs.Errors()
 }
 
-// restoreMount is like Mount() but skips persistence (used during restoration)
-func (m *Mount) restoreMount(traversal context.TraversalContext, steps []BuildStep) error {
+func (m *Mount) restoreMountPoint(ctx context.Context, path string, steps ...builder.MountStep) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	relative := traversal.RelativePath()
-	// Build the mount
-	mounter, err := BuildMounter(steps...)
+	mounter, err := builder.BuildMounter(steps...)
 	if err != nil {
-		return fmt.Errorf("failed to build mounter: %v", err)
+		return fmt.Errorf("failed to build mounter for '%s': %v", path, err)
 	}
 
-	mount, err := mounter.Build(traversal, relative)
+	mount, err := BuildMount(ctx, path, mounter)
 	if err != nil {
-		return fmt.Errorf("failed to build mountpoint: %v", err)
+		return fmt.Errorf("failed to build mountpath for '%s': %v", path, err)
 	}
-	// Add to fstab (don't persist - it's already persisted)
-	m.fstab[relative] = mount
 
+	m.fstab[path] = mount
 	return nil
 }
 
@@ -314,8 +303,50 @@ func (m *Mount) isReadonly() bool {
 	return m.Options.IsReadOnly
 }
 
+func (m *Mount) resolveMountPoint(ctx context.Context, path string) (MountPoint, string) {
+	path = strings.TrimSpace(path)
+	if path != "" && path != "/" {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+
+		var bestMatch MountPoint
+		var bestPrefix string
+
+		for path, mount := range m.fstab {
+			// Normalize paths for comparison
+			normalizedPath := strings.Trim(path, "/")
+			normalizedRelative := strings.Trim(path, "/")
+			// Check if mountpath is a matching prefix
+			if normalizedRelative == normalizedPath || strings.HasPrefix(normalizedRelative, normalizedPath+"/") {
+				// Keep the longest match
+				if len(normalizedPath) > len(bestPrefix) {
+					bestMatch = mount
+					bestPrefix = normalizedPath
+				}
+			}
+		}
+		// Found a matching submount to traverse to
+		if bestPrefix != "" {
+			prefix := strings.Trim(bestPrefix, "/")
+			newPath := path
+			// Remove the prefix and any following slash
+			if prefix != "" {
+				if after, ok := strings.CutPrefix(newPath, prefix+"/"); ok {
+					newPath = after
+				} else if newPath == prefix {
+					newPath = ""
+				}
+			}
+
+			return bestMatch, newPath
+		}
+	}
+	// No submount found, handle locally
+	return m, path
+}
+
 // resolve
-func (m *Mount) resolve(traversal context.TraversalContext) (bool, MountPoint, context.TraversalContext) {
+func (m *Mount) resolve(traversal traversal.TraversalContext) (bool, MountPoint, traversal.TraversalContext) {
 	// Ignore empty or direct relative paths,
 	// these are handled locally
 	relative := traversal.RelativePath()

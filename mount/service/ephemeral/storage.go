@@ -1,12 +1,12 @@
 package ephemeral
 
 import (
+	"context"
 	"io"
 	"path"
 	"strings"
 	"time"
 
-	"github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -15,7 +15,7 @@ func (s *EphemeralObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (eos *EphemeralObjectStorageService) CreateObject(traversal context.TraversalContext, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 
@@ -67,7 +67,7 @@ func (eos *EphemeralObjectStorageService) CreateObject(traversal context.Travers
 	return stat, nil
 }
 
-func (eos *EphemeralObjectStorageService) ReadObject(traversal context.TraversalContext, ns, key string, offset int64, buffer []byte) (int, error) {
+func (eos *EphemeralObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
 	eos.driver.mu.RLock()
 	defer eos.driver.mu.RUnlock()
 
@@ -102,7 +102,7 @@ func (eos *EphemeralObjectStorageService) ReadObject(traversal context.Traversal
 	return n, nil
 }
 
-func (eos *EphemeralObjectStorageService) WriteObject(traversal context.TraversalContext, ns, key string, offset int64, buffer []byte) (int, error) {
+func (eos *EphemeralObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 
@@ -149,7 +149,7 @@ func (eos *EphemeralObjectStorageService) WriteObject(traversal context.Traversa
 	return len(buffer), nil
 }
 
-func (eos *EphemeralObjectStorageService) DeleteObject(traversal context.TraversalContext, ns, key string, force bool) error {
+func (eos *EphemeralObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 
@@ -193,7 +193,7 @@ func (eos *EphemeralObjectStorageService) DeleteObject(traversal context.Travers
 	return nil
 }
 
-func (eos *EphemeralObjectStorageService) ListObjects(traversal context.TraversalContext, ns, key string) ([]*data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
 	eos.driver.mu.RLock()
 	defer eos.driver.mu.RUnlock()
 
@@ -267,7 +267,7 @@ func (eos *EphemeralObjectStorageService) ListObjects(traversal context.Traversa
 	return result, nil
 }
 
-func (eos *EphemeralObjectStorageService) HeadObject(traversal context.TraversalContext, ns, key string) (*data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
 	eos.driver.mu.RLock()
 	defer eos.driver.mu.RUnlock()
 
@@ -281,7 +281,7 @@ func (eos *EphemeralObjectStorageService) HeadObject(traversal context.Traversal
 	return stat, nil
 }
 
-func (eos *EphemeralObjectStorageService) TruncateObject(traversal context.TraversalContext, ns, key string, size int64) error {
+func (eos *EphemeralObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 

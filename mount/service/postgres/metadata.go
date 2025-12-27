@@ -1,13 +1,13 @@
 package postgres
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -18,7 +18,7 @@ func (s *PostgresMetadataService) GetLifecycle() service.Lifecycle {
 }
 
 // CreateMeta creates new metadata for an object
-func (s *PostgresMetadataService) CreateMeta(traversal context.TraversalContext, ns string, meta *data.Metadata) error {
+func (s *PostgresMetadataService) CreateMeta(ctx context.Context, ns string, meta *data.Metadata) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -49,7 +49,7 @@ func (s *PostgresMetadataService) CreateMeta(traversal context.TraversalContext,
 		}
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -58,7 +58,7 @@ func (s *PostgresMetadataService) CreateMeta(traversal context.TraversalContext,
 	contentType := string(meta.ContentType)
 
 	// Insert into database
-	_, err = conn.Exec(traversal, `
+	_, err = conn.Exec(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`, meta.ID, ns, meta.Key, int(meta.Mode), meta.Size,
@@ -76,7 +76,7 @@ func (s *PostgresMetadataService) CreateMeta(traversal context.TraversalContext,
 }
 
 // ReadMeta reads metadata for an object
-func (s *PostgresMetadataService) ReadMeta(traversal context.TraversalContext, ns, key string) (*data.Metadata, error) {
+func (s *PostgresMetadataService) ReadMeta(ctx context.Context, ns, key string) (*data.Metadata, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -87,7 +87,7 @@ func (s *PostgresMetadataService) ReadMeta(traversal context.TraversalContext, n
 		return nil, data.ErrNotExist
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -100,7 +100,7 @@ func (s *PostgresMetadataService) ReadMeta(traversal context.TraversalContext, n
 	var attributesJSON []byte
 	var modifyTime, accessTime, createTime int64
 
-	err = conn.QueryRow(traversal, `
+	err = conn.QueryRow(ctx, `
 		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
 		FROM vfs_metadata WHERE id = $1
 	`, id).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
@@ -149,7 +149,7 @@ func (s *PostgresMetadataService) ReadMeta(traversal context.TraversalContext, n
 }
 
 // UpdateMeta updates metadata for an object
-func (s *PostgresMetadataService) UpdateMeta(traversal context.TraversalContext, ns, key string, update *data.MetadataUpdate) error {
+func (s *PostgresMetadataService) UpdateMeta(ctx context.Context, ns, key string, update *data.MetadataUpdate) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -161,7 +161,7 @@ func (s *PostgresMetadataService) UpdateMeta(traversal context.TraversalContext,
 	}
 
 	// Read current metadata
-	meta, err := s.readMetaInternal(traversal, id)
+	meta, err := s.readMetaInternal(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func (s *PostgresMetadataService) UpdateMeta(traversal context.TraversalContext,
 		}
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -190,7 +190,7 @@ func (s *PostgresMetadataService) UpdateMeta(traversal context.TraversalContext,
 	contentType := string(meta.ContentType)
 
 	// Update database
-	_, err = conn.Exec(traversal, `
+	_, err = conn.Exec(ctx, `
 		UPDATE vfs_metadata
 		SET mode = $1, size = $2, uid = $3, gid = $4,
 		    modify_time = $5, access_time = $6, content_type = $7, etag = $8, attributes = $9
@@ -208,7 +208,7 @@ func (s *PostgresMetadataService) UpdateMeta(traversal context.TraversalContext,
 }
 
 // ExistsMeta checks if metadata exists for an object
-func (s *PostgresMetadataService) ExistsMeta(traversal context.TraversalContext, ns, key string) (bool, error) {
+func (s *PostgresMetadataService) ExistsMeta(ctx context.Context, ns, key string) (bool, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -219,7 +219,7 @@ func (s *PostgresMetadataService) ExistsMeta(traversal context.TraversalContext,
 }
 
 // DeleteMeta deletes metadata for an object
-func (s *PostgresMetadataService) DeleteMeta(traversal context.TraversalContext, ns, key string) error {
+func (s *PostgresMetadataService) DeleteMeta(ctx context.Context, ns, key string) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -230,27 +230,27 @@ func (s *PostgresMetadataService) DeleteMeta(traversal context.TraversalContext,
 		return data.ErrNotExist
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
 	// Start transaction
-	tx, err := conn.Begin(traversal)
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback(traversal)
+	defer tx.Rollback(ctx)
 
 	// Delete metadata
-	_, err = tx.Exec(traversal, "DELETE FROM vfs_metadata WHERE id = $1", id)
+	_, err = tx.Exec(ctx, "DELETE FROM vfs_metadata WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete metadata: %w", err)
 	}
 
 	// Decrement ref count for associated data
-	_, err = tx.Exec(traversal, `
+	_, err = tx.Exec(ctx, `
 		UPDATE vfs_data SET ref_count = ref_count - 1 WHERE id = $1
 	`, id)
 	if err != nil && err != pgx.ErrNoRows {
@@ -258,13 +258,13 @@ func (s *PostgresMetadataService) DeleteMeta(traversal context.TraversalContext,
 	}
 
 	// Delete data with ref_count <= 0
-	_, err = tx.Exec(traversal, "DELETE FROM vfs_data WHERE ref_count <= 0")
+	_, err = tx.Exec(ctx, "DELETE FROM vfs_data WHERE ref_count <= 0")
 	if err != nil {
 		return fmt.Errorf("failed to cleanup data: %w", err)
 	}
 
 	// Commit transaction
-	if err := tx.Commit(traversal); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -274,7 +274,7 @@ func (s *PostgresMetadataService) DeleteMeta(traversal context.TraversalContext,
 }
 
 // QueryMeta queries metadata with filters, sorting, and pagination
-func (s *PostgresMetadataService) QueryMeta(traversal context.TraversalContext, ns string, query *service.Query) (*service.QueryPagination, error) {
+func (s *PostgresMetadataService) QueryMeta(ctx context.Context, ns string, query *service.Query) (*service.QueryPagination, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -354,14 +354,14 @@ func (s *PostgresMetadataService) QueryMeta(traversal context.TraversalContext, 
 		args = append(args, query.Limit, query.Offset)
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
 	// Execute query
-	rows, err := conn.Query(traversal, sqlQuery, args...)
+	rows, err := conn.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
@@ -427,8 +427,8 @@ func (s *PostgresMetadataService) QueryMeta(traversal context.TraversalContext, 
 }
 
 // readMetaInternal reads metadata by ID without locking (caller must hold lock)
-func (s *PostgresMetadataService) readMetaInternal(traversal context.TraversalContext, id string) (*data.Metadata, error) {
-	conn, err := s.driver.pool.Acquire(traversal)
+func (s *PostgresMetadataService) readMetaInternal(ctx context.Context, id string) (*data.Metadata, error) {
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -440,7 +440,7 @@ func (s *PostgresMetadataService) readMetaInternal(traversal context.TraversalCo
 	var attributesJSON []byte
 	var modifyTime, accessTime, createTime int64
 
-	err = conn.QueryRow(traversal, `
+	err = conn.QueryRow(ctx, `
 		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
 		FROM vfs_metadata WHERE id = $1
 	`, id).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,

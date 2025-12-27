@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 
-	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/errors"
 	"github.com/mwantia/vfs/log"
 	"github.com/mwantia/vfs/mount"
@@ -75,7 +74,7 @@ func (vfs *virtualFileSystemImpl) Shutdown(ctx context.Context) error {
 	 *         if the filesystem is "Busy" with a global operation,
 	 *         like 'Shutdown' and either wait or fail its own call. */
 	vfs.shutdown = true
-	return root.Shutdown(traversal.WithAbsolute(ctx, "/"))
+	return root.Shutdown(ctx)
 }
 
 // setRootMountPoint

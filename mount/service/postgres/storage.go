@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -19,7 +19,7 @@ func (s *PostgresObjectStorageService) GetLifecycle() service.Lifecycle {
 }
 
 // CreateObject creates a new file or directory in the storage
-func (s *PostgresObjectStorageService) CreateObject(traversal context.TraversalContext, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -40,13 +40,13 @@ func (s *PostgresObjectStorageService) CreateObject(traversal context.TraversalC
 
 		// Check if parent is actually a directory
 		var parentMode data.FileMode
-		conn, err := s.driver.pool.Acquire(traversal)
+		conn, err := s.driver.pool.Acquire(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to acquire connection: %w", err)
 		}
 		defer conn.Release()
 
-		err = conn.QueryRow(traversal, "SELECT mode FROM vfs_metadata WHERE id = $1", parentID).Scan(&parentMode)
+		err = conn.QueryRow(ctx, "SELECT mode FROM vfs_metadata WHERE id = $1", parentID).Scan(&parentMode)
 		if err != nil {
 			return nil, data.ErrNotExist
 		}
@@ -60,14 +60,14 @@ func (s *PostgresObjectStorageService) CreateObject(traversal context.TraversalC
 	now := time.Now()
 
 	// Acquire connection
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
 	// Insert into database
-	_, err = conn.Exec(traversal, `
+	_, err = conn.Exec(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, modify_time, access_time, create_time)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, meta.ID, ns, key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
@@ -89,7 +89,7 @@ func (s *PostgresObjectStorageService) CreateObject(traversal context.TraversalC
 }
 
 // ReadObject reads data from an object at the specified offset
-func (s *PostgresObjectStorageService) ReadObject(traversal context.TraversalContext, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *PostgresObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -100,7 +100,7 @@ func (s *PostgresObjectStorageService) ReadObject(traversal context.TraversalCon
 		return 0, data.ErrNotExist
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -109,7 +109,7 @@ func (s *PostgresObjectStorageService) ReadObject(traversal context.TraversalCon
 	// Query metadata to get mode and size
 	var mode data.FileMode
 	var size int64
-	err = conn.QueryRow(traversal,
+	err = conn.QueryRow(ctx,
 		"SELECT mode, size FROM vfs_metadata WHERE id = $1", id).Scan(&mode, &size)
 
 	if err == pgx.ErrNoRows {
@@ -129,7 +129,7 @@ func (s *PostgresObjectStorageService) ReadObject(traversal context.TraversalCon
 
 	// Query data from database
 	var content []byte
-	err = conn.QueryRow(traversal,
+	err = conn.QueryRow(ctx,
 		"SELECT content FROM vfs_data WHERE id = $1", id).Scan(&content)
 
 	if err == pgx.ErrNoRows {
@@ -150,7 +150,7 @@ func (s *PostgresObjectStorageService) ReadObject(traversal context.TraversalCon
 }
 
 // WriteObject writes data to an object at the specified offset
-func (s *PostgresObjectStorageService) WriteObject(traversal context.TraversalContext, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *PostgresObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -161,7 +161,7 @@ func (s *PostgresObjectStorageService) WriteObject(traversal context.TraversalCo
 		return 0, data.ErrNotExist
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -170,7 +170,7 @@ func (s *PostgresObjectStorageService) WriteObject(traversal context.TraversalCo
 	// Query metadata to get mode and current size
 	var mode data.FileMode
 	var currentSize int64
-	err = conn.QueryRow(traversal,
+	err = conn.QueryRow(ctx,
 		"SELECT mode, size FROM vfs_metadata WHERE id = $1", id).Scan(&mode, &currentSize)
 
 	if err == pgx.ErrNoRows {
@@ -187,16 +187,16 @@ func (s *PostgresObjectStorageService) WriteObject(traversal context.TraversalCo
 	writeEnd := offset + int64(len(dat))
 
 	// Start transaction
-	tx, err := conn.Begin(traversal)
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback(traversal)
+	defer tx.Rollback(ctx)
 
 	// Get existing content or create new
 	var content []byte
 	var refCount int
-	err = tx.QueryRow(traversal,
+	err = tx.QueryRow(ctx,
 		"SELECT content, ref_count FROM vfs_data WHERE id = $1", id).Scan(&content, &refCount)
 
 	if err != nil && err != pgx.ErrNoRows {
@@ -221,13 +221,13 @@ func (s *PostgresObjectStorageService) WriteObject(traversal context.TraversalCo
 	// Insert or update content
 	if err == pgx.ErrNoRows {
 		// Insert new data
-		_, err = tx.Exec(traversal, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO vfs_data (id, content, size, ref_count, created_at, last_accessed)
 			VALUES ($1, $2, $3, 1, $4, $5)
 		`, id, content, newSize, now, now)
 	} else {
 		// Update existing data
-		_, err = tx.Exec(traversal, `
+		_, err = tx.Exec(ctx, `
 			UPDATE vfs_data SET content = $1, size = $2, last_accessed = $3
 			WHERE id = $4
 		`, content, newSize, now, id)
@@ -239,7 +239,7 @@ func (s *PostgresObjectStorageService) WriteObject(traversal context.TraversalCo
 
 	// Update metadata size if file grew
 	if writeEnd > currentSize {
-		_, err = tx.Exec(traversal, `
+		_, err = tx.Exec(ctx, `
 			UPDATE vfs_metadata SET size = $1, modify_time = $2 WHERE id = $3
 		`, writeEnd, now, id)
 
@@ -248,7 +248,7 @@ func (s *PostgresObjectStorageService) WriteObject(traversal context.TraversalCo
 		}
 	}
 
-	if err := tx.Commit(traversal); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -256,7 +256,7 @@ func (s *PostgresObjectStorageService) WriteObject(traversal context.TraversalCo
 }
 
 // DeleteObject deletes an object (file or directory)
-func (s *PostgresObjectStorageService) DeleteObject(traversal context.TraversalContext, ns, key string, force bool) error {
+func (s *PostgresObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -267,7 +267,7 @@ func (s *PostgresObjectStorageService) DeleteObject(traversal context.TraversalC
 		return data.ErrNotExist
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -275,7 +275,7 @@ func (s *PostgresObjectStorageService) DeleteObject(traversal context.TraversalC
 
 	// Query metadata to check if it's a directory
 	var mode data.FileMode
-	err = conn.QueryRow(traversal,
+	err = conn.QueryRow(ctx,
 		"SELECT mode FROM vfs_metadata WHERE id = $1", id).Scan(&mode)
 
 	if err == pgx.ErrNoRows {
@@ -311,11 +311,11 @@ func (s *PostgresObjectStorageService) DeleteObject(traversal context.TraversalC
 		})
 
 		// Delete all collected paths in transaction
-		tx, err := conn.Begin(traversal)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to start transaction: %w", err)
 		}
-		defer tx.Rollback(traversal)
+		defer tx.Rollback(ctx)
 
 		for _, delKey := range keysToDelete {
 			delID, exists := s.driver.keys.Get(delKey)
@@ -324,13 +324,13 @@ func (s *PostgresObjectStorageService) DeleteObject(traversal context.TraversalC
 			}
 
 			// Delete metadata
-			_, err = tx.Exec(traversal, "DELETE FROM vfs_metadata WHERE id = $1", delID)
+			_, err = tx.Exec(ctx, "DELETE FROM vfs_metadata WHERE id = $1", delID)
 			if err != nil {
 				return fmt.Errorf("failed to delete metadata: %w", err)
 			}
 
 			// Decrement ref count
-			_, err = tx.Exec(traversal, `
+			_, err = tx.Exec(ctx, `
 				UPDATE vfs_data SET ref_count = ref_count - 1 WHERE id = $1
 			`, delID)
 			if err != nil && err != pgx.ErrNoRows {
@@ -339,12 +339,12 @@ func (s *PostgresObjectStorageService) DeleteObject(traversal context.TraversalC
 		}
 
 		// Delete data with ref_count <= 0
-		_, err = tx.Exec(traversal, "DELETE FROM vfs_data WHERE ref_count <= 0")
+		_, err = tx.Exec(ctx, "DELETE FROM vfs_data WHERE ref_count <= 0")
 		if err != nil {
 			return fmt.Errorf("failed to cleanup data: %w", err)
 		}
 
-		if err := tx.Commit(traversal); err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("failed to commit transaction: %w", err)
 		}
 
@@ -357,32 +357,32 @@ func (s *PostgresObjectStorageService) DeleteObject(traversal context.TraversalC
 	}
 
 	// For files, delete directly
-	return s.deleteObjectInternal(traversal, namedKey, id)
+	return s.deleteObjectInternal(ctx, namedKey, id)
 }
 
 // deleteObjectInternal deletes a single object without recursive checks
-func (s *PostgresObjectStorageService) deleteObjectInternal(traversal context.TraversalContext, namedKey, id string) error {
-	conn, err := s.driver.pool.Acquire(traversal)
+func (s *PostgresObjectStorageService) deleteObjectInternal(ctx context.Context, namedKey, id string) error {
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
 	// Start transaction
-	tx, err := conn.Begin(traversal)
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback(traversal)
+	defer tx.Rollback(ctx)
 
 	// Delete metadata
-	_, err = tx.Exec(traversal, "DELETE FROM vfs_metadata WHERE id = $1", id)
+	_, err = tx.Exec(ctx, "DELETE FROM vfs_metadata WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete metadata: %w", err)
 	}
 
 	// Decrement ref_count for associated data
-	_, err = tx.Exec(traversal, `
+	_, err = tx.Exec(ctx, `
 		UPDATE vfs_data SET ref_count = ref_count - 1 WHERE id = $1
 	`, id)
 	if err != nil && err != pgx.ErrNoRows {
@@ -390,13 +390,13 @@ func (s *PostgresObjectStorageService) deleteObjectInternal(traversal context.Tr
 	}
 
 	// Delete data rows with ref_count <= 0 (cleanup unreferenced data)
-	_, err = tx.Exec(traversal, "DELETE FROM vfs_data WHERE ref_count <= 0")
+	_, err = tx.Exec(ctx, "DELETE FROM vfs_data WHERE ref_count <= 0")
 	if err != nil {
 		return fmt.Errorf("failed to cleanup data: %w", err)
 	}
 
 	// Commit transaction
-	if err := tx.Commit(traversal); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -407,7 +407,7 @@ func (s *PostgresObjectStorageService) deleteObjectInternal(traversal context.Tr
 }
 
 // ListObjects lists direct children of a directory or returns info for a file
-func (s *PostgresObjectStorageService) ListObjects(traversal context.TraversalContext, ns, key string) ([]*data.FileStat, error) {
+func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -419,7 +419,7 @@ func (s *PostgresObjectStorageService) ListObjects(traversal context.TraversalCo
 			return nil, data.ErrNotExist
 		}
 
-		conn, err := s.driver.pool.Acquire(traversal)
+		conn, err := s.driver.pool.Acquire(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to acquire connection: %w", err)
 		}
@@ -431,7 +431,7 @@ func (s *PostgresObjectStorageService) ListObjects(traversal context.TraversalCo
 		var modifyTime, createTime int64
 		var contentType *string
 
-		err = conn.QueryRow(traversal, `
+		err = conn.QueryRow(ctx, `
 			SELECT mode, size, modify_time, create_time, content_type
 			FROM vfs_metadata WHERE id = $1
 		`, id).Scan(&mode, &size, &modifyTime, &createTime, &contentType)
@@ -515,7 +515,7 @@ func (s *PostgresObjectStorageService) ListObjects(traversal context.TraversalCo
 
 	// Query metadata for all direct children
 	result := make([]*data.FileStat, 0, len(directChildren))
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -526,7 +526,7 @@ func (s *PostgresObjectStorageService) ListObjects(traversal context.TraversalCo
 		var modifyTime, createTime int64
 		var contentType *string
 
-		err := conn.QueryRow(traversal, `
+		err := conn.QueryRow(ctx, `
 			SELECT key, mode, size, modify_time, create_time, content_type
 			FROM vfs_metadata WHERE id = $1
 		`, childID).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
@@ -545,7 +545,7 @@ func (s *PostgresObjectStorageService) ListObjects(traversal context.TraversalCo
 }
 
 // HeadObject returns metadata for an object without reading its content
-func (s *PostgresObjectStorageService) HeadObject(traversal context.TraversalContext, ns, key string) (*data.FileStat, error) {
+func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -556,7 +556,7 @@ func (s *PostgresObjectStorageService) HeadObject(traversal context.TraversalCon
 		return nil, data.ErrNotExist
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -567,7 +567,7 @@ func (s *PostgresObjectStorageService) HeadObject(traversal context.TraversalCon
 	var modifyTime, createTime int64
 	var contentType *string
 
-	err = conn.QueryRow(traversal, `
+	err = conn.QueryRow(ctx, `
 		SELECT key, mode, size, modify_time, create_time, content_type
 		FROM vfs_metadata WHERE id = $1
 	`, id).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
@@ -592,7 +592,7 @@ func (s *PostgresObjectStorageService) HeadObject(traversal context.TraversalCon
 }
 
 // TruncateObject resizes an object to the specified size
-func (s *PostgresObjectStorageService) TruncateObject(traversal context.TraversalContext, ns, key string, size int64) error {
+func (s *PostgresObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -603,7 +603,7 @@ func (s *PostgresObjectStorageService) TruncateObject(traversal context.Traversa
 		return data.ErrNotExist
 	}
 
-	conn, err := s.driver.pool.Acquire(traversal)
+	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -612,7 +612,7 @@ func (s *PostgresObjectStorageService) TruncateObject(traversal context.Traversa
 	// Query metadata to get mode and current size
 	var mode data.FileMode
 	var currentSize int64
-	err = conn.QueryRow(traversal,
+	err = conn.QueryRow(ctx,
 		"SELECT mode, size FROM vfs_metadata WHERE id = $1", id).Scan(&mode, &currentSize)
 
 	if err == pgx.ErrNoRows {
@@ -631,15 +631,15 @@ func (s *PostgresObjectStorageService) TruncateObject(traversal context.Traversa
 	}
 
 	// Start transaction
-	tx, err := conn.Begin(traversal)
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback(traversal)
+	defer tx.Rollback(ctx)
 
 	// Get existing content
 	var content []byte
-	err = tx.QueryRow(traversal,
+	err = tx.QueryRow(ctx,
 		"SELECT content FROM vfs_data WHERE id = $1", id).Scan(&content)
 
 	now := time.Now().Unix()
@@ -647,7 +647,7 @@ func (s *PostgresObjectStorageService) TruncateObject(traversal context.Traversa
 	if err == pgx.ErrNoRows {
 		// No existing data - create new empty content of specified size
 		content = make([]byte, size)
-		_, err = tx.Exec(traversal, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO vfs_data (id, content, size, ref_count, created_at, last_accessed)
 			VALUES ($1, $2, $3, 1, $4, $5)
 		`, id, content, size, now, now)
@@ -664,7 +664,7 @@ func (s *PostgresObjectStorageService) TruncateObject(traversal context.Traversa
 		}
 
 		// Update existing data
-		_, err = tx.Exec(traversal, `
+		_, err = tx.Exec(ctx, `
 			UPDATE vfs_data SET content = $1, size = $2, last_accessed = $3
 			WHERE id = $4
 		`, content, size, now, id)
@@ -675,7 +675,7 @@ func (s *PostgresObjectStorageService) TruncateObject(traversal context.Traversa
 	}
 
 	// Update metadata size in transaction
-	_, err = tx.Exec(traversal, `
+	_, err = tx.Exec(ctx, `
 		UPDATE vfs_metadata SET size = $1, modify_time = $2 WHERE id = $3
 	`, size, now, id)
 
@@ -683,7 +683,7 @@ func (s *PostgresObjectStorageService) TruncateObject(traversal context.Traversa
 		return fmt.Errorf("failed to update metadata: %w", err)
 	}
 
-	if err := tx.Commit(traversal); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 

@@ -120,8 +120,7 @@ func (*S3ObjectStorageDriver) GetExtensionService(ext service.ServiceExtension) 
 }
 
 // parseS3BackendConfig extracts S3BackendConfig from Uri
-// URI format: s3[s]://host:port/bucketname?accesskey=xxx&secretkey=xxx&region=us-east-1
-// Alternative: s3[s]://accesskey:secretkey@host:port/bucketname?region=us-east-1
+// URI format: s3[s]://accesskey:secretkey@host:port/bucketname?region=us-east-1
 func parseS3BackendConfig(uri *service.Uri, useSsl bool) *S3BackendConfig {
 	cfg := &S3BackendConfig{
 		Endpoint:   "localhost:9000",
@@ -146,17 +145,13 @@ func parseS3BackendConfig(uri *service.Uri, useSsl bool) *S3BackendConfig {
 		cfg.BucketName = strings.TrimPrefix(uri.Path, "/")
 	}
 
-	// Parse credentials - priority: Username/Password > Query params
+	// Parse credentials from username (access key) and password (secret key)
 	if uri.Username != "" {
 		cfg.AccessKey = uri.Username
-	} else if accessKey, ok := uri.Query["accesskey"]; ok {
-		cfg.AccessKey = accessKey
 	}
 
 	if uri.Password != "" {
 		cfg.SecretKey = uri.Password
-	} else if secretKey, ok := uri.Query["secretkey"]; ok {
-		cfg.SecretKey = secretKey
 	}
 
 	// Parse optional region

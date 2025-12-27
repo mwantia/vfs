@@ -52,8 +52,8 @@ func (c *contextImpl) Traverse(path string) TraversalContext {
 
 	// Remove the prefix and any following slash
 	if prefix != "" {
-		if strings.HasPrefix(newRelative, prefix+"/") {
-			newRelative = strings.TrimPrefix(newRelative, prefix+"/")
+		if after, ok := strings.CutPrefix(newRelative, prefix+"/"); ok {
+			newRelative = after
 		} else if newRelative == prefix {
 			newRelative = ""
 		}

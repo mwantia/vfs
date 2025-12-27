@@ -1,13 +1,13 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -16,7 +16,7 @@ func (s *SqliteMetadataService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *SqliteMetadataService) ExistsMeta(traversal context.TraversalContext, ns, key string) (bool, error) {
+func (s *SqliteMetadataService) ExistsMeta(ctx context.Context, ns, key string) (bool, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -25,7 +25,7 @@ func (s *SqliteMetadataService) ExistsMeta(traversal context.TraversalContext, n
 	return exists, nil
 }
 
-func (s *SqliteMetadataService) ReadMeta(traversal context.TraversalContext, ns, key string) (*data.Metadata, error) {
+func (s *SqliteMetadataService) ReadMeta(ctx context.Context, ns, key string) (*data.Metadata, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -43,7 +43,7 @@ func (s *SqliteMetadataService) ReadMeta(traversal context.TraversalContext, ns,
 	var attributesJSON sql.NullString
 	var modifyTime, accessTime, createTime int64
 
-	err := s.driver.db.QueryRowContext(traversal, `
+	err := s.driver.db.QueryRowContext(ctx, `
 		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
 		FROM vfs_metadata WHERE id = ?
 	`, id).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
@@ -86,7 +86,7 @@ func (s *SqliteMetadataService) ReadMeta(traversal context.TraversalContext, ns,
 	return &meta, nil
 }
 
-func (s *SqliteMetadataService) CreateMeta(traversal context.TraversalContext, ns string, meta *data.Metadata) error {
+func (s *SqliteMetadataService) CreateMeta(ctx context.Context, ns string, meta *data.Metadata) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -127,7 +127,7 @@ func (s *SqliteMetadataService) CreateMeta(traversal context.TraversalContext, n
 	contentType := string(meta.ContentType)
 
 	// Insert into database
-	_, err := s.driver.db.ExecContext(traversal, `
+	_, err := s.driver.db.ExecContext(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, meta.ID, ns, meta.Key, int(meta.Mode), meta.Size,
@@ -145,7 +145,7 @@ func (s *SqliteMetadataService) CreateMeta(traversal context.TraversalContext, n
 	return nil
 }
 
-func (s *SqliteMetadataService) UpdateMeta(traversal context.TraversalContext, ns, key string, update *data.MetadataUpdate) error {
+func (s *SqliteMetadataService) UpdateMeta(ctx context.Context, ns, key string, update *data.MetadataUpdate) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -163,7 +163,7 @@ func (s *SqliteMetadataService) UpdateMeta(traversal context.TraversalContext, n
 	var attributesJSON sql.NullString
 	var modifyTime, accessTime, createTime int64
 
-	err := s.driver.db.QueryRowContext(traversal, `
+	err := s.driver.db.QueryRowContext(ctx, `
 		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
 		FROM vfs_metadata WHERE id = ?
 	`, id).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
@@ -219,7 +219,7 @@ func (s *SqliteMetadataService) UpdateMeta(traversal context.TraversalContext, n
 	newContentType := string(meta.ContentType)
 
 	// Update in database
-	_, err = s.driver.db.ExecContext(traversal, `
+	_, err = s.driver.db.ExecContext(ctx, `
 		UPDATE vfs_metadata
 		SET key = ?, mode = ?, size = ?, uid = ?, gid = ?,
 		    modify_time = ?, content_type = ?, etag = ?, attributes = ?
@@ -233,7 +233,7 @@ func (s *SqliteMetadataService) UpdateMeta(traversal context.TraversalContext, n
 	return err
 }
 
-func (s *SqliteMetadataService) DeleteMeta(traversal context.TraversalContext, ns, key string) error {
+func (s *SqliteMetadataService) DeleteMeta(ctx context.Context, ns, key string) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -245,20 +245,20 @@ func (s *SqliteMetadataService) DeleteMeta(traversal context.TraversalContext, n
 	}
 
 	// Start transaction for atomic deletion
-	tx, err := s.driver.db.BeginTx(traversal, nil)
+	tx, err := s.driver.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
 	// Delete metadata
-	_, err = tx.ExecContext(traversal, "DELETE FROM vfs_metadata WHERE id = ?", id)
+	_, err = tx.ExecContext(ctx, "DELETE FROM vfs_metadata WHERE id = ?", id)
 	if err != nil {
 		return err
 	}
 
 	// Decrement ref_count for associated data
-	_, err = tx.ExecContext(traversal, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE vfs_data
 		SET ref_count = ref_count - 1
 		WHERE id = ?
@@ -268,7 +268,7 @@ func (s *SqliteMetadataService) DeleteMeta(traversal context.TraversalContext, n
 	}
 
 	// Delete data rows with ref_count = 0 (cleanup unreferenced data)
-	_, err = tx.ExecContext(traversal, "DELETE FROM vfs_data WHERE ref_count = 0")
+	_, err = tx.ExecContext(ctx, "DELETE FROM vfs_data WHERE ref_count = 0")
 	if err != nil {
 		return err
 	}
@@ -284,7 +284,7 @@ func (s *SqliteMetadataService) DeleteMeta(traversal context.TraversalContext, n
 	return nil
 }
 
-func (s *SqliteMetadataService) QueryMeta(traversal context.TraversalContext, ns string, query *service.Query) (*service.QueryPagination, error) {
+func (s *SqliteMetadataService) QueryMeta(ctx context.Context, ns string, query *service.Query) (*service.QueryPagination, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -362,7 +362,7 @@ func (s *SqliteMetadataService) QueryMeta(traversal context.TraversalContext, ns
 	}
 
 	// Execute query
-	rows, err := s.driver.db.QueryContext(traversal, sqlQuery, args...)
+	rows, err := s.driver.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}

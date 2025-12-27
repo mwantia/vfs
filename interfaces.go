@@ -6,6 +6,7 @@ import (
 
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount"
+	"github.com/mwantia/vfs/mount/builder"
 )
 
 // VirtualFileSystem is the main VFS manager that handles mount points and delegates
@@ -28,7 +29,7 @@ type VirtualFileSystem interface {
 
 	// Mount attaches a filesystem handler at the specified path.
 	// Options can be used to configure the mount (e.g., read-only).
-	Mount(ctx context.Context, path string, steps ...mount.BuildStep) error
+	Mount(ctx context.Context, path string, steps ...builder.MountStep) error
 
 	// Unmount removes the filesystem handler at the specified path.
 	// Returns an error if the path is not mounted or has child mounts.

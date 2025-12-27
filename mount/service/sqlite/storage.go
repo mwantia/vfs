@@ -1,12 +1,12 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"path"
 	"strings"
 	"time"
 
-	"github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -15,7 +15,7 @@ func (s *SqliteObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *SqliteObjectStorageService) CreateObject(traversal context.TraversalContext, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 	// Check if key already exists in B-tree
@@ -35,7 +35,7 @@ func (s *SqliteObjectStorageService) CreateObject(traversal context.TraversalCon
 
 		// Check if parent is actually a directory
 		var parentMode data.FileMode
-		err := s.driver.db.QueryRowContext(traversal, "SELECT mode FROM vfs_metadata WHERE id = ?", parentID).Scan(&parentMode)
+		err := s.driver.db.QueryRowContext(ctx, "SELECT mode FROM vfs_metadata WHERE id = ?", parentID).Scan(&parentMode)
 		if err != nil {
 			return nil, data.ErrNotExist
 		}
@@ -49,7 +49,7 @@ func (s *SqliteObjectStorageService) CreateObject(traversal context.TraversalCon
 	now := time.Now()
 
 	// Insert into database
-	_, err := s.driver.db.ExecContext(traversal, `
+	_, err := s.driver.db.ExecContext(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, modify_time, access_time, create_time)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, meta.ID, ns, key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
@@ -59,7 +59,7 @@ func (s *SqliteObjectStorageService) CreateObject(traversal context.TraversalCon
 	}
 
 	// Initialize empty data row with ref_count = 1
-	_, err = s.driver.db.ExecContext(traversal, `
+	_, err = s.driver.db.ExecContext(ctx, `
 		INSERT INTO vfs_data (id, content, size, ref_count, created_at, last_accessed)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, meta.ID, []byte{}, 0, 1, now.Unix(), now.Unix())
@@ -82,7 +82,7 @@ func (s *SqliteObjectStorageService) CreateObject(traversal context.TraversalCon
 	}, nil
 }
 
-func (s *SqliteObjectStorageService) ReadObject(traversal context.TraversalContext, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *SqliteObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 	// Check B-tree for key existence
@@ -95,7 +95,7 @@ func (s *SqliteObjectStorageService) ReadObject(traversal context.TraversalConte
 	// Query metadata to get mode and size
 	var mode data.FileMode
 	var size int64
-	err := s.driver.db.QueryRowContext(traversal,
+	err := s.driver.db.QueryRowContext(ctx,
 		"SELECT mode, size FROM vfs_metadata WHERE id = ?", id).Scan(&mode, &size)
 
 	if err == sql.ErrNoRows {
@@ -117,7 +117,7 @@ func (s *SqliteObjectStorageService) ReadObject(traversal context.TraversalConte
 
 	// Query data content
 	var content []byte
-	err = s.driver.db.QueryRowContext(traversal, "SELECT content FROM vfs_data WHERE id = ?", id).Scan(&content)
+	err = s.driver.db.QueryRowContext(ctx, "SELECT content FROM vfs_data WHERE id = ?", id).Scan(&content)
 
 	if err == sql.ErrNoRows {
 		// No data stored yet (empty file)
@@ -137,7 +137,7 @@ func (s *SqliteObjectStorageService) ReadObject(traversal context.TraversalConte
 	return int(toRead), nil
 }
 
-func (s *SqliteObjectStorageService) WriteObject(traversal context.TraversalContext, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *SqliteObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -151,7 +151,7 @@ func (s *SqliteObjectStorageService) WriteObject(traversal context.TraversalCont
 	// Query metadata to get mode and current size
 	var mode data.FileMode
 	var currentSize int64
-	err := s.driver.db.QueryRowContext(traversal,
+	err := s.driver.db.QueryRowContext(ctx,
 		"SELECT mode, size FROM vfs_metadata WHERE id = ?", id).Scan(&mode, &currentSize)
 
 	if err == sql.ErrNoRows {
@@ -169,7 +169,7 @@ func (s *SqliteObjectStorageService) WriteObject(traversal context.TraversalCont
 	writeEnd := offset + int64(len(dat))
 
 	// Start transaction for atomic update
-	tx, err := s.driver.db.BeginTx(traversal, nil)
+	tx, err := s.driver.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -177,7 +177,7 @@ func (s *SqliteObjectStorageService) WriteObject(traversal context.TraversalCont
 
 	// Get existing content
 	var content []byte
-	err = tx.QueryRowContext(traversal,
+	err = tx.QueryRowContext(ctx,
 		"SELECT content FROM vfs_data WHERE id = ?", id).Scan(&content)
 
 	if err != nil && err != sql.ErrNoRows {
@@ -202,13 +202,13 @@ func (s *SqliteObjectStorageService) WriteObject(traversal context.TraversalCont
 	// Update or insert data
 	if err == sql.ErrNoRows {
 		// Insert new data row
-		_, err = tx.ExecContext(traversal, `
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO vfs_data (id, content, size, ref_count, created_at, last_accessed)
 			VALUES (?, ?, ?, 1, ?, ?)
 		`, id, content, newSize, now, now)
 	} else {
 		// Update existing data
-		_, err = tx.ExecContext(traversal, `
+		_, err = tx.ExecContext(ctx, `
 			UPDATE vfs_data SET content = ?, size = ?, last_accessed = ?
 			WHERE id = ?
 		`, content, newSize, now, id)
@@ -220,7 +220,7 @@ func (s *SqliteObjectStorageService) WriteObject(traversal context.TraversalCont
 
 	// Update metadata size if file grew
 	if writeEnd > currentSize {
-		_, err = tx.ExecContext(traversal, `
+		_, err = tx.ExecContext(ctx, `
 			UPDATE vfs_metadata SET size = ?, modify_time = ? WHERE id = ?
 		`, writeEnd, now, id)
 
@@ -237,7 +237,7 @@ func (s *SqliteObjectStorageService) WriteObject(traversal context.TraversalCont
 	return len(dat), nil
 }
 
-func (s *SqliteObjectStorageService) DeleteObject(traversal context.TraversalContext, ns, key string, force bool) error {
+func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -250,7 +250,7 @@ func (s *SqliteObjectStorageService) DeleteObject(traversal context.TraversalCon
 
 	// Query metadata to check if it's a directory
 	var mode data.FileMode
-	err := s.driver.db.QueryRowContext(traversal,
+	err := s.driver.db.QueryRowContext(ctx,
 		"SELECT mode FROM vfs_metadata WHERE id = ?", id).Scan(&mode)
 
 	if err == sql.ErrNoRows {
@@ -286,7 +286,7 @@ func (s *SqliteObjectStorageService) DeleteObject(traversal context.TraversalCon
 
 		// Delete all children first (recursive)
 		for _, childKey := range keysToDelete {
-			if err := s.deleteObjectInternal(traversal, ns, childKey); err != nil {
+			if err := s.deleteObjectInternal(ctx, ns, childKey); err != nil {
 				// Continue deleting even if some fail
 				// Could collect errors and return combined error
 			}
@@ -294,12 +294,12 @@ func (s *SqliteObjectStorageService) DeleteObject(traversal context.TraversalCon
 	}
 
 	// Delete the object itself
-	return s.deleteObjectInternal(traversal, ns, key)
+	return s.deleteObjectInternal(ctx, ns, key)
 }
 
 // deleteObjectInternal deletes a single object without recursive checks
 // MUST be called while holding a write lock
-func (s *SqliteObjectStorageService) deleteObjectInternal(traversal context.TraversalContext, ns, key string) error {
+func (s *SqliteObjectStorageService) deleteObjectInternal(ctx context.Context, ns, key string) error {
 	// Check if key exists
 	namedKey := service.NamedKey(ns, key, ":")
 	id, exists := s.driver.keys.Get(namedKey)
@@ -308,20 +308,20 @@ func (s *SqliteObjectStorageService) deleteObjectInternal(traversal context.Trav
 	}
 
 	// Start transaction for atomic deletion
-	tx, err := s.driver.db.BeginTx(traversal, nil)
+	tx, err := s.driver.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
 	// Delete metadata
-	_, err = tx.ExecContext(traversal, "DELETE FROM vfs_metadata WHERE id = ?", id)
+	_, err = tx.ExecContext(ctx, "DELETE FROM vfs_metadata WHERE id = ?", id)
 	if err != nil {
 		return err
 	}
 
 	// Decrement ref_count for associated data
-	_, err = tx.ExecContext(traversal, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE vfs_data
 		SET ref_count = ref_count - 1
 		WHERE id = ?
@@ -331,7 +331,7 @@ func (s *SqliteObjectStorageService) deleteObjectInternal(traversal context.Trav
 	}
 
 	// Delete data rows with ref_count = 0 (cleanup unreferenced data)
-	_, err = tx.ExecContext(traversal, "DELETE FROM vfs_data WHERE ref_count = 0")
+	_, err = tx.ExecContext(ctx, "DELETE FROM vfs_data WHERE ref_count = 0")
 	if err != nil {
 		return err
 	}
@@ -347,7 +347,7 @@ func (s *SqliteObjectStorageService) deleteObjectInternal(traversal context.Trav
 	return nil
 }
 
-func (s *SqliteObjectStorageService) ListObjects(traversal context.TraversalContext, ns, key string) ([]*data.FileStat, error) {
+func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -365,7 +365,7 @@ func (s *SqliteObjectStorageService) ListObjects(traversal context.TraversalCont
 		var contentType sql.NullString
 		var modifyTime, createTime int64
 
-		err := s.driver.db.QueryRowContext(traversal, `
+		err := s.driver.db.QueryRowContext(ctx, `
 			SELECT mode, size, modify_time, create_time, content_type
 			FROM vfs_metadata WHERE id = ?
 		`, id).Scan(&mode, &size, &modifyTime, &createTime, &contentType)
@@ -450,7 +450,7 @@ func (s *SqliteObjectStorageService) ListObjects(traversal context.TraversalCont
 		var contentType sql.NullString
 		var modifyTime, createTime int64
 
-		err := s.driver.db.QueryRowContext(traversal, `
+		err := s.driver.db.QueryRowContext(ctx, `
 			SELECT key, mode, size, modify_time, create_time, content_type
 			FROM vfs_metadata WHERE id = ?
 		`, childID).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
@@ -468,7 +468,7 @@ func (s *SqliteObjectStorageService) ListObjects(traversal context.TraversalCont
 	return result, nil
 }
 
-func (s *SqliteObjectStorageService) HeadObject(traversal context.TraversalContext, ns, key string) (*data.FileStat, error) {
+func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 	// Check B-tree for key existence
@@ -483,7 +483,7 @@ func (s *SqliteObjectStorageService) HeadObject(traversal context.TraversalConte
 	var contentType sql.NullString
 	var modifyTime, createTime int64
 
-	err := s.driver.db.QueryRowContext(traversal, `
+	err := s.driver.db.QueryRowContext(ctx, `
 		SELECT key, mode, size, modify_time, create_time, content_type
 		FROM vfs_metadata WHERE id = ?
 	`, id).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
@@ -507,7 +507,7 @@ func (s *SqliteObjectStorageService) HeadObject(traversal context.TraversalConte
 	return &stat, nil
 }
 
-func (s *SqliteObjectStorageService) TruncateObject(traversal context.TraversalContext, ns, key string, size int64) error {
+func (s *SqliteObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -521,7 +521,7 @@ func (s *SqliteObjectStorageService) TruncateObject(traversal context.TraversalC
 	// Query metadata to get mode and current size
 	var mode data.FileMode
 	var currentSize int64
-	err := s.driver.db.QueryRowContext(traversal,
+	err := s.driver.db.QueryRowContext(ctx,
 		"SELECT mode, size FROM vfs_metadata WHERE id = ?", id).Scan(&mode, &currentSize)
 
 	if err == sql.ErrNoRows {
@@ -542,7 +542,7 @@ func (s *SqliteObjectStorageService) TruncateObject(traversal context.TraversalC
 	}
 
 	// Start transaction for atomic update
-	tx, err := s.driver.db.BeginTx(traversal, nil)
+	tx, err := s.driver.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -550,7 +550,7 @@ func (s *SqliteObjectStorageService) TruncateObject(traversal context.TraversalC
 
 	// Get existing content
 	var content []byte
-	err = tx.QueryRowContext(traversal,
+	err = tx.QueryRowContext(ctx,
 		"SELECT content FROM vfs_data WHERE id = ?", id).Scan(&content)
 
 	now := time.Now().Unix()
@@ -558,7 +558,7 @@ func (s *SqliteObjectStorageService) TruncateObject(traversal context.TraversalC
 	if err == sql.ErrNoRows {
 		// No existing data - create new empty content of specified size
 		content = make([]byte, size)
-		_, err = tx.ExecContext(traversal, `
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO vfs_data (id, content, size, ref_count, created_at, last_accessed)
 			VALUES (?, ?, ?, 1, ?, ?)
 		`, id, content, size, now, now)
@@ -577,7 +577,7 @@ func (s *SqliteObjectStorageService) TruncateObject(traversal context.TraversalC
 		}
 
 		// Update existing data
-		_, err = tx.ExecContext(traversal, `
+		_, err = tx.ExecContext(ctx, `
 			UPDATE vfs_data SET content = ?, size = ?, last_accessed = ?
 			WHERE id = ?
 		`, content, size, now, id)
@@ -588,7 +588,7 @@ func (s *SqliteObjectStorageService) TruncateObject(traversal context.TraversalC
 	}
 
 	// Update metadata size
-	_, err = tx.ExecContext(traversal, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE vfs_metadata SET size = ?, modify_time = ? WHERE id = ?
 	`, size, now, id)
 

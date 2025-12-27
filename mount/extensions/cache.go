@@ -1,33 +1,32 @@
 package extensions
 
 import (
+	"context"
 	"time"
-
-	"github.com/mwantia/vfs/context"
 )
 
 type CacheExtension interface {
 	// GetCache
-	GetCache(traversal context.TraversalContext, key string) ([]byte, error)
+	GetCache(ctx context.Context, key string) ([]byte, error)
 
 	// SetCache
-	SetCache(traversal context.TraversalContext, key string, value []byte, ttl time.Duration) error
+	SetCache(ctx context.Context, key string, value []byte, ttl time.Duration) error
 
 	// DeleteCache
-	DeleteCache(traversal context.TraversalContext, key string) error
+	DeleteCache(ctx context.Context, key string) error
 
 	// ClearCache
-	ClearCache(traversal context.TraversalContext) error
+	ClearCache(ctx context.Context) error
 
 	// ExistsCache
-	ExistsCache(traversal context.TraversalContext, key string) (bool, error)
+	ExistsCache(ctx context.Context, key string) (bool, error)
 
 	// GetBatchCache
-	GetBatchCache(traversal context.TraversalContext, keys ...string) (map[string][]byte, error)
+	GetBatchCache(ctx context.Context, keys ...string) (map[string][]byte, error)
 
 	// SetBatchCache
-	SetBatchCache(traversal context.TraversalContext, items map[string][]byte, ttl time.Duration) error
+	SetBatchCache(ctx context.Context, items map[string][]byte, ttl time.Duration) error
 
 	// DeleteBatchCache
-	DeleteBatchCache(traversal context.TraversalContext, keys ...string) error
+	DeleteBatchCache(ctx context.Context, keys ...string) error
 }

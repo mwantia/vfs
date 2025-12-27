@@ -1,13 +1,13 @@
 package direct
 
 import (
+	"context"
 	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 
-	"github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -18,7 +18,7 @@ func (s *DirectObjectStorageService) GetLifecycle() service.Lifecycle {
 }
 
 // CreateObject creates a new file or directory in the filesystem
-func (s *DirectObjectStorageService) CreateObject(traversal context.TraversalContext, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *DirectObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -52,7 +52,7 @@ func (s *DirectObjectStorageService) CreateObject(traversal context.TraversalCon
 }
 
 // ReadObject reads data from a file at the specified offset
-func (s *DirectObjectStorageService) ReadObject(traversal context.TraversalContext, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *DirectObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -85,7 +85,7 @@ func (s *DirectObjectStorageService) ReadObject(traversal context.TraversalConte
 }
 
 // WriteObject writes data to a file at the specified offset
-func (s *DirectObjectStorageService) WriteObject(traversal context.TraversalContext, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *DirectObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -113,7 +113,7 @@ func (s *DirectObjectStorageService) WriteObject(traversal context.TraversalCont
 }
 
 // DeleteObject deletes a file or directory
-func (s *DirectObjectStorageService) DeleteObject(traversal context.TraversalContext, ns, key string, force bool) error {
+func (s *DirectObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -139,7 +139,7 @@ func (s *DirectObjectStorageService) DeleteObject(traversal context.TraversalCon
 }
 
 // ListObjects lists directory contents or returns info for a single file
-func (s *DirectObjectStorageService) ListObjects(traversal context.TraversalContext, ns, key string) ([]*data.FileStat, error) {
+func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -174,15 +174,15 @@ func (s *DirectObjectStorageService) ListObjects(traversal context.TraversalCont
 			continue // Skip entries with errors
 		}
 
-		childKey := filepath.Join(key, entry.Name())
-		stats = append(stats, s.driver.toFileStat(childKey, childInfo))
+		// Return just the entry name (direct child), not the full path
+		stats = append(stats, s.driver.toFileStat(entry.Name(), childInfo))
 	}
 
 	return stats, nil
 }
 
 // HeadObject returns metadata for a file or directory
-func (s *DirectObjectStorageService) HeadObject(traversal context.TraversalContext, ns, key string) (*data.FileStat, error) {
+func (s *DirectObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -203,7 +203,7 @@ func (s *DirectObjectStorageService) HeadObject(traversal context.TraversalConte
 }
 
 // TruncateObject resizes a file to the specified size
-func (s *DirectObjectStorageService) TruncateObject(traversal context.TraversalContext, ns, key string, size int64) error {
+func (s *DirectObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 

@@ -1,12 +1,13 @@
 package consul
 
 import (
+	"context"
 	"io"
 	"path"
 	"time"
 
 	"github.com/hashicorp/consul/api"
-	"github.com/mwantia/vfs/context"
+
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/service"
 )
@@ -15,7 +16,7 @@ func (s *ConsulObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *ConsulObjectStorageService) CreateObject(traversal context.TraversalContext, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -97,7 +98,7 @@ func (s *ConsulObjectStorageService) CreateObject(traversal context.TraversalCon
 	}, nil
 }
 
-func (s *ConsulObjectStorageService) ReadObject(traversal context.TraversalContext, ns, key string, offset int64, buffer []byte) (int, error) {
+func (s *ConsulObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -134,7 +135,7 @@ func (s *ConsulObjectStorageService) ReadObject(traversal context.TraversalConte
 	return n, nil
 }
 
-func (s *ConsulObjectStorageService) WriteObject(traversal context.TraversalContext, ns, key string, offset int64, buffer []byte) (int, error) {
+func (s *ConsulObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -179,7 +180,7 @@ func (s *ConsulObjectStorageService) WriteObject(traversal context.TraversalCont
 	return len(buffer), nil
 }
 
-func (s *ConsulObjectStorageService) DeleteObject(traversal context.TraversalContext, ns, key string, force bool) error {
+func (s *ConsulObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -241,7 +242,7 @@ func (s *ConsulObjectStorageService) DeleteObject(traversal context.TraversalCon
 	return nil
 }
 
-func (s *ConsulObjectStorageService) ListObjects(traversal context.TraversalContext, ns, key string) ([]*data.FileStat, error) {
+func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -386,7 +387,7 @@ func (s *ConsulObjectStorageService) ListObjects(traversal context.TraversalCont
 	return result, nil
 }
 
-func (s *ConsulObjectStorageService) HeadObject(traversal context.TraversalContext, ns, key string) (*data.FileStat, error) {
+func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -448,7 +449,7 @@ func (s *ConsulObjectStorageService) HeadObject(traversal context.TraversalConte
 	return nil, data.ErrNotExist
 }
 
-func (s *ConsulObjectStorageService) TruncateObject(traversal context.TraversalContext, ns, key string, size int64) error {
+func (s *ConsulObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 

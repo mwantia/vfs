@@ -120,7 +120,7 @@ func (*ConsulMonolithDriver) GetExtensionService(ext service.ServiceExtension) s
 }
 
 // parseConsulConfig extracts ConsulBackendConfig from ServiceURI
-// URI format: consul[s]://host:port/prefix?token=xxx&datacenter=dc1&namespace=prod
+// URI format: consul[s]://token@host:port/prefix?datacenter=dc1&namespace=prod
 func parseConsulConfig(uri *service.Uri, ssl bool) *ConsulBackendConfig {
 	cfg := &ConsulBackendConfig{
 		Address:    "127.0.0.1:8500",
@@ -153,11 +153,9 @@ func parseConsulConfig(uri *service.Uri, ssl bool) *ConsulBackendConfig {
 		cfg.Prefix = uri.Path
 	}
 
-	// Parse token (from username or query parameter)
+	// Parse token from username field
 	if uri.Username != "" {
 		cfg.Token = uri.Username
-	} else if token, ok := uri.Query["token"]; ok {
-		cfg.Token = token
 	}
 
 	// Parse datacenter from query

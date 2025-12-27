@@ -8,30 +8,39 @@ import (
 	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/errors"
 	"github.com/mwantia/vfs/mount"
+	"github.com/mwantia/vfs/mount/builder"
 )
 
 // Mount attaches a filesystem handler at the specified path.
 // Options can be used to configure the mount (e.g., read-only).
-func (vfs *virtualFileSystemImpl) Mount(ctx context.Context, path string, steps ...mount.BuildStep) error {
+func (vfs *virtualFileSystemImpl) Mount(ctx context.Context, path string, steps ...builder.MountStep) error {
 	ctx, err := validateContext(ctx)
 	if err != nil {
 		return err
 	}
-
-	travel := traversal.WithAbsolute(ctx, path)
 	// Handle root mount separately
-	if strings.TrimSpace(path) == "/" {
-		mounter, err := mount.BuildMounter(steps...)
+	path = strings.TrimSpace(path)
+	if path == "/" {
+		mounter, err := builder.BuildMounter(steps...)
 		if err != nil {
 			return fmt.Errorf("failed to build mounter for path '%s': %v", path, err)
 		}
 
-		root, err := mounter.Build(ctx, "/")
+		root, err := mount.BuildMount(ctx, "/", mounter)
 		if err != nil {
 			return fmt.Errorf("failed to build mount for path '%s': %v", path, err)
 		}
 
-		return vfs.setRootMountPoint(root)
+		if err := vfs.setRootMountPoint(root); err != nil {
+			return err
+		}
+
+		// Restore persisted mounts if MountExtension is available
+		if err := root.Restore(ctx); err != nil {
+			return fmt.Errorf("failed to restore persisted mounts: %v", err)
+		}
+
+		return nil
 	}
 	// All other mounts are traversed towards the correct mountpoint
 	root, err := vfs.checkRootMount()
@@ -39,7 +48,7 @@ func (vfs *virtualFileSystemImpl) Mount(ctx context.Context, path string, steps 
 		return errors.ErrInvalidRootMount
 	}
 
-	return root.Mount(travel, steps...)
+	return root.Mount(ctx, path, steps...)
 }
 
 // Unmount removes the filesystem handler at the specified path.
@@ -52,7 +61,7 @@ func (vfs *virtualFileSystemImpl) Unmount(ctx context.Context, path string, forc
 
 	// Handle root mount separately
 	path = strings.TrimSpace(path)
-	if strings.TrimSpace(path) == "/" {
+	if path == "/" {
 		//
 		vfs.mu.Lock()
 		defer vfs.mu.Unlock()
@@ -75,5 +84,5 @@ func (vfs *virtualFileSystemImpl) Unmount(ctx context.Context, path string, forc
 		return errors.ErrInvalidRootUnmount
 	}
 
-	return root.Unmount(traversal.WithAbsolute(ctx, path), force)
+	return root.Unmount(ctx, path, force)
 }

@@ -3,49 +3,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/mwantia/vfs/mount/service"
 	"github.com/tidwall/btree"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
-
-const sqliteSchema = `
-	-- Metadata storage
-	CREATE TABLE IF NOT EXISTS vfs_metadata (
-		id TEXT PRIMARY KEY,
-		namespace TEXT NOT NULL DEFAULT '',
-		key TEXT NOT NULL,
-		mode INTEGER NOT NULL,
-		size INTEGER NOT NULL DEFAULT 0,
-		uid INTEGER,
-		gid INTEGER,
-		modify_time INTEGER NOT NULL,
-		access_time INTEGER NOT NULL,
-		create_time INTEGER NOT NULL,
-		content_type TEXT,
-		etag TEXT,
-		attributes TEXT,
-		UNIQUE(namespace, key)
-	);
-	CREATE INDEX IF NOT EXISTS idx_vfs_metadata_namespace_key ON vfs_metadata(namespace, key);
-
-	-- Content storage with reference counting
-	CREATE TABLE IF NOT EXISTS vfs_data (
-		id TEXT PRIMARY KEY,
-		content BLOB NOT NULL,
-		size INTEGER NOT NULL CHECK(size >= 0),
-		ref_count INTEGER NOT NULL DEFAULT 0,
-		created_at INTEGER NOT NULL,
-		last_accessed INTEGER NOT NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_vfs_data_ref_count ON vfs_data(ref_count);
-
-	-- Mount specifications (virtual /etc/fstab)
-	CREATE TABLE IF NOT EXISTS vfs_mounts (
-		path TEXT PRIMARY KEY,
-		spec TEXT NOT NULL
-	);
-`
 
 func NewSqliteMonolithDriver(uri *service.Uri) (*SqliteMonolithDriver, error) {
 	cfg := parseSqliteBackendConfig(uri)
@@ -145,7 +108,7 @@ func (d *SqliteMonolithDriver) OpenDriver(ctx context.Context) error {
 	}
 
 	// Create schema if it doesn't exist
-	if _, err := db.ExecContext(ctx, sqliteSchema); err != nil {
+	if _, err := db.ExecContext(ctx, Shema); err != nil {
 		db.Close()
 		return err
 	}
@@ -189,6 +152,13 @@ func (d *SqliteMonolithDriver) CloseDriver(ctx context.Context) error {
 
 	// Close database connection if it exists
 	if d.db != nil {
+		// Checkpoint WAL before closing to ensure clean shutdown
+		if d.cfg.WALMode {
+			if _, err := d.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+				return fmt.Errorf("failed to checkpoint WAL: %w", err)
+			}
+		}
+
 		if err := d.db.Close(); err != nil {
 			return err
 		}
@@ -235,9 +205,14 @@ func parseSqliteBackendConfig(uri *service.Uri) *SqliteBackendConfig {
 	// sqlite:// → :memory:
 	// sqlite:///path/to/db → /path/to/db
 	// sqlite://path/to/db → path/to/db
+	// sqlite://test/gosync.db → test/gosync.db
 	if uri.Host != "" {
 		// Host is set, combine with path
-		cfg.Path = uri.Host + uri.Path
+		if uri.Path != "" {
+			cfg.Path = uri.Host + "/" + uri.Path
+		} else {
+			cfg.Path = uri.Host
+		}
 	} else if uri.Path != "" && uri.Path != "/" {
 		// Only path is set
 		cfg.Path = uri.Path
