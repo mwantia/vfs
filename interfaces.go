@@ -27,6 +27,9 @@ type VirtualFileSystem interface {
 	// Execute runs a command with the given arguments, writing output to the provided writer
 	Execute(ctx context.Context, writer io.Writer, args ...string) (int, error)
 
+	// ExecuteWithStreams runs a command with full control over stdin, stdout, and stderr
+	ExecuteWithStreams(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args ...string) (int, error)
+
 	// Mount attaches a filesystem handler at the specified path.
 	// Options can be used to configure the mount (e.g., read-only).
 	Mount(ctx context.Context, path string, steps ...builder.MountStep) error

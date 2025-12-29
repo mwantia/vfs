@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/mwantia/vfs/cmd"
 	"github.com/mwantia/vfs/errors"
 	"github.com/mwantia/vfs/log"
 	"github.com/mwantia/vfs/mount"
@@ -15,6 +16,11 @@ type virtualFileSystemImpl struct {
 
 	log  *log.Logger
 	root mount.MountPoint
+
+	// Command system
+	cmdContext *cmd.CommandContext
+	rootCmd    *cmd.Command
+	execCtx    *cmd.ExecutionContext
 }
 
 func NewVirtualFileSystem(opts ...VirtualFileSystemOption) (VirtualFileSystem, error) {
@@ -26,7 +32,9 @@ func NewVirtualFileSystem(opts ...VirtualFileSystemOption) (VirtualFileSystem, e
 	}
 
 	vfs := &virtualFileSystemImpl{
-		log: log.NewLogger("vfs", options.LogLevel, options.LogFile, options.NoTerminalLog),
+		log:        log.NewLogger("vfs", options.LogLevel, options.LogFile, options.NoTerminalLog),
+		cmdContext: cmd.NewCommandContext(),
+		execCtx:    cmd.NewExecutionContext(),
 	}
 
 	if err := vfs.initBuiltinCommands(); err != nil {
@@ -103,4 +111,23 @@ func (vfs *virtualFileSystemImpl) checkRootMount() (mount.MountPoint, error) {
 	}
 
 	return vfs.root, nil
+}
+
+// GetContext returns the command context
+func (vfs *virtualFileSystemImpl) GetContext() *cmd.CommandContext {
+	return vfs.cmdContext
+}
+
+// GetExecutionContext returns the execution context
+func (vfs *virtualFileSystemImpl) GetExecutionContext() *cmd.ExecutionContext {
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+	return vfs.execCtx
+}
+
+// SetExecutionContext temporarily sets the execution context (used by executor)
+func (vfs *virtualFileSystemImpl) SetExecutionContext(execCtx *cmd.ExecutionContext) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+	vfs.execCtx = execCtx
 }
