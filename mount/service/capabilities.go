@@ -14,12 +14,13 @@ const (
 type ServiceExtension string
 
 const (
-	ServiceExtensionMount    ServiceExtension = "mount"
-	ServiceExtensionACL      ServiceExtension = "acl"
-	ServiceExtensionCache    ServiceExtension = "cache"
-	ServiceExtensionEncrypt  ServiceExtension = "encrypt"
-	ServiceExtensionSnapshot ServiceExtension = "snapshot"
-	ServiceExtensionRubbish  ServiceExtension = "rubbish"
+	ServiceExtensionMount        ServiceExtension = "mount"
+	ServiceExtensionNotification ServiceExtension = "notification"
+	ServiceExtensionACL          ServiceExtension = "acl"
+	ServiceExtensionCache        ServiceExtension = "cache"
+	ServiceExtensionEncrypt      ServiceExtension = "encrypt"
+	ServiceExtensionSnapshot     ServiceExtension = "snapshot"
+	ServiceExtensionRubbish      ServiceExtension = "rubbish"
 )
 
 type ObjectStorageOperation string

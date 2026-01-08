@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/extensions/notification"
 	"github.com/mwantia/vfs/mount/service"
 	"github.com/tidwall/btree"
 )
@@ -37,4 +38,18 @@ type EphemeralObjectStorageService struct {
 
 type EphemeralMountExtensionService struct {
 	driver *EphemeralMonolithDriver
+}
+
+type EphemeralNotificationExtensionService struct {
+	driver *EphemeralMonolithDriver
+	hub    *EphemeralNotificationHub
+}
+
+type EphemeralNotificationHub struct {
+	mu sync.RWMutex
+
+	subscriptions   map[string]*ephemeralSubscription
+	events          []notification.NotificationEvent
+	maxHistorySize  int
+	subscriptionIdx uint64
 }

@@ -1,7 +1,6 @@
 package builder
 
 import (
-	"context"
 	"fmt"
 	"maps"
 
@@ -15,12 +14,6 @@ type MountBuilder struct {
 	Options       MountOptions                        `json:"options"`
 }
 
-type MountOptions struct {
-	Namespace  string `json:"namespace"`
-	PathPrefix string `json:"path_prefix"`
-	IsReadOnly bool   `json:"is_readonly"`
-}
-
 type MountStep func(*MountBuilder) error
 
 func BuildMounter(steps ...MountStep) (*MountBuilder, error) {
@@ -29,6 +22,7 @@ func BuildMounter(steps ...MountStep) (*MountBuilder, error) {
 			// Default value options
 			Namespace:  "",
 			PathPrefix: "",
+			Cascading:  false,
 			IsReadOnly: false,
 		},
 		Extensions: make(map[service.ServiceExtension]string),
@@ -41,10 +35,6 @@ func BuildMounter(steps ...MountStep) (*MountBuilder, error) {
 	}
 
 	return builder, nil
-}
-
-func IdentifyMountSteps(ctx context.Context, uri string) {
-
 }
 
 // ToMountSpec converts a MountBuilder into a MountSpecifications.

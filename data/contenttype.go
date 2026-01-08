@@ -1,7 +1,7 @@
 package data
 
 import (
-	"path/filepath"
+	pathpkg "path"
 	"strings"
 )
 
@@ -89,7 +89,7 @@ var MIMEToExtension = map[ContentType]string{
 // GetMIMEType returns the MIME type for a file extension
 func GetMIMEType(path string) ContentType {
 	// Extract extension
-	ext := strings.ToLower(filepath.Ext(path))
+	ext := strings.ToLower(pathpkg.Ext(path))
 
 	if mimeType, exists := ExtensionToMIME[ext]; exists {
 		return mimeType

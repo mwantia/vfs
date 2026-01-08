@@ -332,8 +332,12 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 			basename = child[idx+1:]
 		}
 
-		// The key should just be the basename (relative to parent directory)
-		relKey := basename
+		// Construct absolute key: parent path + basename
+		absoluteKey := key
+		if absoluteKey != "" {
+			absoluteKey += "/"
+		}
+		absoluteKey += basename
 
 		if hasTrailingSlash {
 			// Directory (explicit or virtual) - fetch the key to get metadata
@@ -341,7 +345,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 			if err != nil || pair == nil {
 				// Virtual directory - no explicit key
 				result = append(result, &data.FileStat{
-					Key:        relKey,
+					Key:        absoluteKey,
 					Mode:       0755 | data.ModeDir,
 					Size:       0,
 					CreateTime: time.Now(),
@@ -355,7 +359,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 				}
 
 				result = append(result, &data.FileStat{
-					Key:        relKey,
+					Key:        absoluteKey,
 					Mode:       mode,
 					Size:       0,
 					CreateTime: time.Unix(0, int64(pair.CreateIndex)),
@@ -375,7 +379,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 			}
 
 			result = append(result, &data.FileStat{
-				Key:        relKey,
+				Key:        absoluteKey,
 				Mode:       mode,
 				Size:       int64(len(pair.Value)),
 				CreateTime: time.Unix(0, int64(pair.CreateIndex)),

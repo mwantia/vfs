@@ -134,7 +134,10 @@ func helpCmd() *cmd.Command {
 }
 
 // getFileType returns a human-readable file type
-func getFileType(mode interface{ IsDir() bool; IsRegular() bool }) string {
+func getFileType(mode interface {
+	IsDir() bool
+	IsRegular() bool
+}) string {
 	if mode.IsDir() {
 		return "directory"
 	}

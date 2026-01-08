@@ -6,6 +6,14 @@ import (
 	"github.com/mwantia/vfs/mount/service"
 )
 
+type MountOptions struct {
+	Namespace  string `json:"namespace"`
+	PathPrefix string `json:"path_prefix"`
+
+	Cascading  bool `json:"cascading"`
+	IsReadOnly bool `json:"is_readonly"`
+}
+
 func WithProfile(name string) MountStep {
 	return func(mb *MountBuilder) error {
 		profile, err := GetProfile(name)
@@ -104,6 +112,13 @@ func WithPathPrefix(pathPrefix string) MountStep {
 func AsReadOnly() MountStep {
 	return func(mb *MountBuilder) error {
 		mb.Options.IsReadOnly = true
+		return nil
+	}
+}
+
+func AsCascading() MountStep {
+	return func(mb *MountBuilder) error {
+		mb.Options.Cascading = true
 		return nil
 	}
 }

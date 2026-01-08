@@ -2,9 +2,11 @@ package vfs_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/mwantia/vfs"
 	"github.com/mwantia/vfs/data"
@@ -19,7 +21,8 @@ import (
 func TestVirtualFileSystem_Init(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(t *testing.T) {
-			ctx := t.Context()
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
 
 			vfs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
@@ -41,7 +44,9 @@ func TestVirtualFileSystem_Init(t *testing.T) {
 func TestAllMounts_FileOperations(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Minute)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)
@@ -104,7 +109,9 @@ func TestAllMounts_FileOperations(t *testing.T) {
 func TestAllMounts_DirectoryOperations(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Second)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)
@@ -152,7 +159,9 @@ func TestAllMounts_DirectoryOperations(t *testing.T) {
 func TestAllMounts_NestedPaths(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Second)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)
@@ -205,7 +214,9 @@ func TestAllMounts_NestedPaths(t *testing.T) {
 func TestAllMounts_ErrorCases(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Second)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)
@@ -243,7 +254,9 @@ func TestAllMounts_ErrorCases(t *testing.T) {
 func TestAllMounts_StatOperations(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Second)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)
@@ -304,7 +317,9 @@ func TestAllMounts_StatOperations(t *testing.T) {
 func TestAllMounts_MultipleFilesOperations(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Second)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)
@@ -351,7 +366,9 @@ func TestAllMounts_MultipleFilesOperations(t *testing.T) {
 func TestAllMounts_FileAppendOperations(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Second)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)
@@ -401,7 +418,9 @@ func TestAllMounts_FileAppendOperations(t *testing.T) {
 func TestAllMounts_FileTruncateOperations(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Second)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)
@@ -446,7 +465,9 @@ func TestAllMounts_FileTruncateOperations(t *testing.T) {
 func TestAllMounts_EmptyDirectoryOperations(t *testing.T) {
 	for name, factory := range Factories {
 		t.Run(name, func(tst *testing.T) {
-			ctx := tst.Context()
+			ctx, cancel := context.WithTimeout(tst.Context(), 30*time.Second)
+			defer cancel()
+
 			fs, err := vfs.NewVirtualFileSystem(vfs.WithLogLevel(log.Debug))
 			if err != nil {
 				tst.Fatalf("Failed to initialize vfs: %v", err)

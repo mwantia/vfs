@@ -1,26 +1,26 @@
 package mount
 
 import (
+	"context"
 	"fmt"
-	"sort"
 	"strings"
 
-	"github.com/google/uuid"
-	"github.com/mwantia/vfs/context"
+	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/errors"
+	"github.com/mwantia/vfs/mount/extensions/notification"
 	"github.com/mwantia/vfs/mount/service"
 )
 
 // OpenFile opens a file with the specified access mode flags and returns a file handle.
 // The returned VirtualFile must be closed by the caller. Use flags to control access.
-func (m *Mount) OpenFile(traversal context.TraversalContext, flags data.AccessMode) (MountStreamer, error) {
+func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.AccessMode) (MountStreamer, error) {
 	//
 	if match, mount, mountTraversal := m.resolve(traversal); match {
 		return mount.OpenFile(mountTraversal, flags)
 	}
 	// Throw if mountpoint is marked as readonly
-	if m.isReadonly() {
+	if m.Options.IsReadOnly {
 		// We have to check if the provided flags requests any "writable"-access
 		if flags&data.AccessModeWrite != 0 || flags&data.AccessModeCreate != 0 || flags&data.AccessModeExcl != 0 {
 			return nil, errors.ErrMountIsReadonly
@@ -114,12 +114,16 @@ func (m *Mount) OpenFile(traversal context.TraversalContext, flags data.AccessMo
 		offset = stat.Size
 	}
 
+	if ok, err := m.emitNotificationEvent(traversal, notification.NotificationTypeFileOpened, key, false, 0); ok && err != nil {
+		return nil, err
+	}
+
 	return newTraversalMountStreamer(traversal, m, offset, flags), nil
 }
 
 // CloseFile closes an open file handle at the given path.
 // This may be a no-op for implementations that don't maintain file handles.
-func (m *Mount) CloseFile(traversal context.TraversalContext, force bool) error {
+func (m *Mount) CloseFile(traversal traversal.TraversalContext, force bool) error {
 	//
 	if match, mount, mountTraversal := m.resolve(traversal); match {
 		return mount.CloseFile(mountTraversal, force)
@@ -128,23 +132,31 @@ func (m *Mount) CloseFile(traversal context.TraversalContext, force bool) error 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	relativePath := traversal.RelativePath()
+
+	if ok, err := m.emitNotificationEvent(traversal, notification.NotificationTypeFileClosed, relativePath, false, 0); ok && err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // Read reads size bytes from the file at path starting at offset.
 // Returns the data read or an error if the operation fails.
-func (m *Mount) ReadFile(traversal context.TraversalContext, offset, size int64) ([]byte, error) {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.ReadFile(mountTraversal, offset, size)
+func (m *Mount) ReadFile(ctx context.Context, path string, offset, size int64) ([]byte, error) {
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		// Delegate to child mount, but don't return immediately
+		buffer, err := mount.ReadFile(ctx, path, offset, size)
+		if err != nil {
+			return nil, err
+		}
+
+		return buffer, nil
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	namespace := m.Options.Namespace
-	key := traversal.RelativePath()
-
 	// Check supported service operations
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationRead) {
@@ -155,8 +167,12 @@ func (m *Mount) ReadFile(traversal context.TraversalContext, offset, size int64)
 	buffer := make([]byte, size)
 
 	// Read from ObjectStorage
-	n, err := m.ObjectStorage.ReadObject(traversal, namespace, key, offset, buffer)
+	n, err := m.ObjectStorage.ReadObject(ctx, m.Options.Namespace, path, offset, buffer)
 	if err != nil {
+		return nil, err
+	}
+
+	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeRead, path, false, 0); ok && err != nil {
 		return nil, err
 	}
 
@@ -166,36 +182,36 @@ func (m *Mount) ReadFile(traversal context.TraversalContext, offset, size int64)
 
 // Write writes data to the file at path starting at offset.
 // Returns the number of bytes written or an error if the operation fails.
-func (m *Mount) WriteFile(traversal context.TraversalContext, offset int64, buffer []byte) (int, error) {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.WriteFile(mountTraversal, offset, buffer)
+func (m *Mount) WriteFile(ctx context.Context, path string, offset int64, buffer []byte) (int, error) {
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		// Delegate to child mount, but don't return immediately
+		size, err := mount.WriteFile(ctx, path, offset, buffer)
+		if err != nil {
+			return 0, err
+		}
+
+		return size, nil
 	}
 	// Throw if mountpoint is marked as readonly
-	if m.isReadonly() {
+	if m.Options.IsReadOnly {
 		return 0, errors.ErrMountIsReadonly
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	namespace := m.Options.Namespace
-	key := traversal.RelativePath()
-
 	// Check supported service operations
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationWrite) {
 		return 0, errors.ErrOperationNotSupported
 	}
-
 	// Check object size constraints (final size after write)
 	writeEnd := offset + int64(len(buffer))
 	if err := m.validateObjectSize(writeEnd); err != nil {
 		return 0, err
 	}
-
 	// Write to ObjectStorage
-	n, err := m.ObjectStorage.WriteObject(traversal, namespace, key, offset, buffer)
+	n, err := m.ObjectStorage.WriteObject(ctx, m.Options.Namespace, path, offset, buffer)
 	if err != nil {
 		return 0, err
 	}
@@ -203,7 +219,7 @@ func (m *Mount) WriteFile(traversal context.TraversalContext, offset int64, buff
 	// Sync write to MetadataService if available (update size and modify time)
 	if m.Metadata != nil {
 		// Get current file size after write
-		stat, statErr := m.ObjectStorage.HeadObject(traversal, namespace, key)
+		stat, statErr := m.ObjectStorage.HeadObject(ctx, m.Options.Namespace, path)
 		if statErr != nil {
 			// TODO :: Missing internal log for tracking internal errors
 			fmt.Printf("WARNING: Failed to get file stat after write for metadata sync: %v\n", statErr)
@@ -214,407 +230,405 @@ func (m *Mount) WriteFile(traversal context.TraversalContext, offset int64, buff
 					Size: stat.Size,
 				},
 			}
-			if updateErr := m.Metadata.UpdateMeta(traversal, namespace, key, update); updateErr != nil && updateErr != data.ErrNotExist {
+			if updateErr := m.Metadata.UpdateMeta(ctx, m.Options.Namespace, path, update); updateErr != nil && updateErr != data.ErrNotExist {
 				// TODO :: Missing internal log for tracking internal errors
 				fmt.Printf("WARNING: Failed to sync write to metadata service: %v\n", updateErr)
 			}
 		}
 	}
 
+	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeModified, path, false, 0); ok && err != nil {
+		return 0, err
+	}
+
 	return n, nil
 }
 
-// Stat returns file information for the given path.
+// StatMetadata returns file information for the given path.
 // Returns an error if the path doesn't exist.
-func (m *Mount) StatMetadata(traversal context.TraversalContext) (*data.Metadata, error) {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.StatMetadata(mountTraversal)
-	}
-	// Only lock after checks for traversing submounts is done.
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	namespace := m.Options.Namespace
-	key := traversal.RelativePath()
-
-	// Try MetadataService first (if available)
+func (m *Mount) StatMetadata(ctx context.Context, path string) (*data.Metadata, error) {
+	// Check if this mount has metadata defined
 	if m.Metadata != nil {
-		meta, err := m.Metadata.ReadMeta(traversal, namespace, key)
-		if err == nil {
-			return meta, nil
-		}
-		// If not found in metadata, try to sync from ObjectStorage
-		if err == data.ErrNotExist {
-			// Check if ObjectStorage supports read before calling it
-			caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
-			if !caps.SupportsOperation(service.ObjectStorageOperationRead) {
-				return nil, errors.ErrOperationNotSupported
-			}
+		// Only check if cascading OR owner of the matched path
+		if m.Options.Cascading || !m.matchAnyMountPoints(path) {
+			m.mu.RLock()
+			meta, err := m.Metadata.ReadMeta(ctx, m.Options.Namespace, path)
+			m.mu.RUnlock()
+			// Metadata found and will be returned directly
+			if err == nil {
+				if ok, emitErr := m.emitNotificationEvent(ctx, notification.NotificationTypeRead, path, false, 0); ok && emitErr != nil {
+					// TODO :: Missing internal log for tracking internal errors
+					fmt.Printf("Warning: Failed to emit notification event: %v", emitErr)
+				}
 
-			// Try ObjectStorage
-			stat, objErr := m.ObjectStorage.HeadObject(traversal, namespace, key)
-			if objErr != nil {
-				return nil, objErr
+				return meta, nil
 			}
-
-			// Sync to MetadataService
-			meta := stat.ToMetadata()
-			if syncErr := m.Metadata.CreateMeta(traversal, namespace, meta); syncErr != nil && syncErr != data.ErrExist {
-				// TODO :: Missing internal log for tracking internal errors
-				fmt.Printf("WARNING: Failed to sync ObjectStorage stat to MetadataService: %v\n", syncErr)
+			// Other error, propagate and return
+			if err != data.ErrNotExist {
+				return nil, err
 			}
-			return meta, nil
+			// We continue to check child mounts or object-storage
 		}
-		// Other errors from metadata service
-		return nil, err
+	}
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		// Delegate to child mount but don't return immediately
+		meta, err := mount.StatMetadata(ctx, relativePath)
+		if err != nil {
+			return nil, err
+		}
+		// writing back data  from a child mount into the root
+		if m.Metadata != nil {
+			// We only need to check if cascading is enabled when
+			if m.Options.Cascading {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				// Clone metadata and adjust path prefix
+				prefix := strings.TrimSuffix(strings.TrimSuffix(path, relativePath), "/")
+				syncMeta := meta.Clone(&data.MetadataUpdate{
+					Mask: data.MetadataUpdateKey,
+					Metadata: &data.Metadata{
+						Key: prefix + "/" + meta.Key,
+					},
+				})
+				if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, syncMeta); syncErr != nil && syncErr != data.ErrExist {
+					// TODO :: Missing internal log for tracking internal errors
+					fmt.Printf("WARNING: Failed to cascade metadata for '%s': %v\n", path, syncErr)
+				}
+			}
+		}
+
+		if ok, emitErr := m.emitNotificationEvent(ctx, notification.NotificationTypeRead, path, false, 0); ok && emitErr != nil {
+			// TODO :: Missing internal log for tracking internal errors
+			fmt.Printf("Warning: Failed to emit notification event: %v", emitErr)
+		}
+
+		return meta, nil
 	}
 
-	// Fallback to ObjectStorage only
+	m.mu.RLock()
 	// Check if ObjectStorage supports read before calling it
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationRead) {
 		return nil, errors.ErrOperationNotSupported
 	}
+	// Get stat from ObjectStorage
+	stat, err := m.ObjectStorage.HeadObject(ctx, m.Options.Namespace, path)
+	m.mu.RUnlock()
 
-	stat, err := m.ObjectStorage.HeadObject(traversal, namespace, key)
 	if err != nil {
 		return nil, err
 	}
+	// Convert into metadata
+	meta := stat.ToMetadata()
 
-	return stat.ToMetadata(), nil
+	if m.Metadata != nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		// Sync data from object-storage into metadata
+		if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
+			// TODO :: Missing internal log for tracking internal errors
+			fmt.Printf("WARNING: Failed to sync ObjectStorage stat to MetadataService: %v\n", syncErr)
+		}
+	}
+
+	if ok, emitErr := m.emitNotificationEvent(ctx, notification.NotificationTypeRead, path, false, 0); ok && emitErr != nil {
+		// TODO :: Missing internal log for tracking internal errors
+		fmt.Printf("Warning: Failed to emit notification event: %v", emitErr)
+	}
+
+	return meta, nil
 }
 
-// Lookup checks if a file or directory exists at the given path.
+// LookupMetadata checks if a file or directory exists at the given path.
 // Returns true if the path exists, false otherwise.
-func (m *Mount) LookupMetadata(traversal context.TraversalContext) (bool, error) {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.LookupMetadata(mountTraversal)
+func (m *Mount) LookupMetadata(ctx context.Context, path string, quick bool) (bool, error) {
+	// Check if this mount has metadata defined
+	if m.Metadata != nil {
+		// Only perform metadata check if quick is 'true'
+		// AND cascading or owner of the matched path is true
+		if quick && (m.Options.Cascading || !m.matchAnyMountPoints(path)) {
+			m.mu.RLock()
+			exists, err := m.Metadata.ExistsMeta(ctx, m.Options.Namespace, path)
+			m.mu.RUnlock()
+			// Throw if error is returned
+			if err != nil {
+				return false, err
+			}
+			// Metadata found and will be returned directly
+			return exists, nil
+		}
 	}
-	// Only lock after checks for traversing submounts is done.
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		exists, err := mount.LookupMetadata(ctx, relativePath, quick)
+		if err != nil {
+			return false, err
+		}
+
+		return exists, nil
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// Check if ObjectStorage supports read before calling it
+	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
+	if !caps.SupportsOperation(service.ObjectStorageOperationRead) {
+		return false, errors.ErrOperationNotSupported
+	}
+	// Get stat from ObjectStorage
+	stat, err := m.ObjectStorage.HeadObject(ctx, m.Options.Namespace, path)
+	if err != nil {
+		return false, err
+	}
 
-	// TODO: Implement actual lookup logic
-	// When implemented, check ObjectStorage capabilities before calling ObjectStorage methods
-	return false, nil
+	return stat != nil, nil
 }
 
 // ReadDirectory returns a list of entries in the directory at path.
 // Returns an error if the path is not a directory or doesn't exist.
-func (m *Mount) ReadDirectory(traversal context.TraversalContext) ([]*data.Metadata, error) {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.ReadDirectory(mountTraversal)
-	}
-	// Only lock after checks for traversing submounts is done.
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	namespace := m.Options.Namespace
-	key := traversal.RelativePath()
-
-	// Try MetadataService first (if available) - optimized directory indices
+func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]*data.Metadata, error) {
+	// Check if this mount has metadata defined
 	if m.Metadata != nil {
-		// Normalize key to end with "/" for directory prefix queries
-		prefix := key
-		if prefix != "" && prefix[len(prefix)-1] != '/' {
-			prefix += "/"
+		// Only check if cascading OR owner of the matched path
+		if m.Options.Cascading || !m.matchAnyMountPoints(path) {
+			// Try MetadataService first (if available) - optimized directory indices
+			m.mu.RLock()
+			// Normalize key to end with "/" for directory prefix queries
+			prefix := path
+			if prefix != "" && prefix[len(prefix)-1] != '/' {
+				prefix += "/"
+			}
+
+			query := &service.Query{
+				Prefix:    prefix,
+				Delimiter: "/", // Only direct children
+			}
+
+			result, queryErr := m.Metadata.QueryMeta(ctx, m.Options.Namespace, query)
+			if queryErr == nil && len(result.Candidates) > 0 {
+				// Metadata already contains absolute paths - return as-is
+				if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeRead, path, true, 0); ok && err != nil {
+					return nil, err
+				}
+
+				m.mu.RUnlock()
+				return m.injectMountEntries(path, result.Candidates), nil
+			}
+
+			m.mu.RUnlock()
+		}
+		// We continue to check child mounts or object-storage
+	}
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		metas, err := mount.ReadDirectory(ctx, relativePath)
+		if err != nil {
+			return nil, err
 		}
 
-		query := &service.Query{
-			Prefix:    prefix,
-			Delimiter: "/", // Only direct children
-		}
+		// Calculate mount point prefix
+		prefix := strings.TrimSuffix(strings.TrimSuffix(path, relativePath), "/")
 
-		result, queryErr := m.Metadata.QueryMeta(traversal, namespace, query)
-		if queryErr == nil && len(result.Candidates) > 0 {
-			// Strip prefix from metadata keys to match ListObjects behavior
-			// Metadata stores full paths, but ReadDirectory should return basenames
-			if key != "" {
-				for _, meta := range result.Candidates {
-					meta.Key = strings.TrimPrefix(meta.Key, key+"/")
+		// Adjust paths: prepend mount point to make paths absolute from root
+		clonedMetas := data.BatchMetadata(metas, func(m *data.Metadata, i int) *data.Metadata {
+			m.Key = prefix + "/" + m.Key
+			return m
+		})
+
+		// Cascade to metadata (store unadjusted paths so mount is relocatable)
+		if m.Metadata != nil && m.Options.Cascading {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			for _, meta := range metas {
+				if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
+					// TODO :: Missing internal log for tracking internal errors
+					fmt.Printf("WARNING: Failed to sync directory entry %s to MetadataService: %v\n", meta.Key, syncErr)
 				}
 			}
-			return m.injectMountEntries(key, result.Candidates), nil
 		}
 
-		// If metadata is empty or error, sync from ObjectStorage
-		// Check if ObjectStorage supports list before calling it
-		caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
-		if !caps.SupportsOperation(service.ObjectStorageOperationList) {
-			return nil, errors.ErrOperationNotSupported
+		if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeRead, path, true, 0); ok && err != nil {
+			return nil, err
 		}
 
-		stats, objErr := m.ObjectStorage.ListObjects(traversal, namespace, key)
-		if objErr != nil {
-			return nil, objErr
-		}
-		// Convert to metadata list (keep basenames for return value)
-		metaList := make([]*data.Metadata, len(stats))
-		for i, stat := range stats {
-			meta := stat.ToMetadata()
-			metaList[i] = meta
-			// Clone and fix key for metadata storage
-			// ListObjects returns keys relative to the listed directory (just basenames)
-			// but metadata needs full paths relative to mount root
-			clone := meta.Clone()
-			if key != "" && !strings.Contains(clone.Key, "/") {
-				clone.Key = key + "/" + clone.Key
-			}
-			// Best-effort sync with full path
-			if syncErr := m.Metadata.CreateMeta(traversal, namespace, clone); syncErr != nil && syncErr != data.ErrExist {
-				// TODO :: Missing internal log for tracking internal errors
-				fmt.Printf("WARNING: Failed to sync directory entry %s to MetadataService: %v\n", clone.Key, syncErr)
-			}
-		}
-
-		return m.injectMountEntries(key, metaList), nil
+		return m.injectMountEntries(path, clonedMetas), nil
 	}
-
 	// Fallback to ObjectStorage only
+	m.mu.RLock()
 	// Check if ObjectStorage supports list before calling it
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationList) {
 		return nil, errors.ErrOperationNotSupported
 	}
 
-	stats, err := m.ObjectStorage.ListObjects(traversal, namespace, key)
+	stats, err := m.ObjectStorage.ListObjects(ctx, m.Options.Namespace, path)
+	m.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
-
-	result := make([]*data.Metadata, len(stats))
+	// Convert into metadata
+	metas := make([]*data.Metadata, len(stats))
 	for i, stat := range stats {
-		result[i] = stat.ToMetadata()
+		metas[i] = stat.ToMetadata()
 	}
 
-	return m.injectMountEntries(key, result), nil
-}
+	if m.Metadata != nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
 
-// findDirectChildMounts returns mount entries that are direct children of the given path.
-// For example, if path is "a" and fstab contains ["a/b/c", "a/d", "x/y"]:
-//   - Returns: ["b", "d"] (direct children only)
-//   - Excludes: "b/c" (nested under b), "x/y" (different parent)
-//
-// Thread-safety: Caller must hold m.mu (RLock or Lock).
-func (m *Mount) findDirectChildMounts(path string) []string {
-	// Normalize path for comparison
-	normalizedPath := strings.Trim(path, "/")
-
-	// Root path special case
-	var searchPrefix string
-	if normalizedPath == "" {
-		searchPrefix = "" // Root - no prefix needed
-	} else {
-		searchPrefix = normalizedPath + "/"
-	}
-
-	childNames := make(map[string]bool)
-
-	for mountPath := range m.fstab {
-		normalizedMount := strings.Trim(mountPath, "/")
-
-		// Root path: show top-level mounts (no "/" in path)
-		if normalizedPath == "" {
-			// Split mount path and take first segment
-			parts := strings.SplitN(normalizedMount, "/", 2)
-			if parts[0] != "" {
-				childNames[parts[0]] = true
+		for _, meta := range metas {
+			// Best-effort sync with full path
+			if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
+				// TODO :: Missing internal log for tracking internal errors
+				fmt.Printf("WARNING: Failed to sync directory entry %s to MetadataService: %v\n", meta.Key, syncErr)
 			}
-			continue
-		}
-
-		// Non-root: check prefix match
-		if !strings.HasPrefix(normalizedMount, searchPrefix) {
-			continue // Not under this path
-		}
-
-		// Get relative path after prefix
-		relativePath := strings.TrimPrefix(normalizedMount, searchPrefix)
-
-		// Only direct children (no nested slashes)
-		parts := strings.SplitN(relativePath, "/", 2)
-		if parts[0] != "" {
-			childNames[parts[0]] = true
 		}
 	}
 
-	// Convert map to sorted slice for deterministic output
-	result := make([]string, 0, len(childNames))
-	for name := range childNames {
-		result = append(result, name)
+	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeRead, path, true, 0); ok && err != nil {
+		return nil, err
 	}
 
-	// Sort alphabetically
-	sort.Strings(result)
-
-	return result
-}
-
-// createMountMetadata generates synthetic metadata for a mount entry.
-// The metadata is virtual (not persisted) and uses mount creation time.
-func (m *Mount) createMountMetadata(name string, key string) *data.Metadata {
-	now := m.createTime // Use mount creation time for consistency
-
-	return &data.Metadata{
-		ID:          uuid.Must(uuid.NewV7()).String(), // Generate unique ID
-		Key:         key,
-		Mode:        data.ModeMount | data.ModeDir | 0555, // Mount + Directory + r-xr-xr-x
-		Size:        0,                                    // Directories have 0 size
-		AccessTime:  now,
-		ModifyTime:  now,
-		CreateTime:  now,
-		ContentType: "", // Directories have no content type
-		Attributes: map[string]string{
-			"mount.virtual": "true", // Mark as virtual mount entry
-		},
-	}
-}
-
-// injectMountEntries adds mount entries to directory listing and handles path conflicts.
-// Mount entries shadow any real directories with the same name (mount takes precedence).
-//
-// Thread-safety: Caller must hold m.mu (at least RLock).
-func (m *Mount) injectMountEntries(dirPath string, entries []*data.Metadata) []*data.Metadata {
-	// Find direct child mounts for this path
-	childMounts := m.findDirectChildMounts(dirPath)
-
-	if len(childMounts) == 0 {
-		return entries // No mounts to inject
-	}
-
-	// Create mount metadata entries
-	mountEntries := make(map[string]*data.Metadata, len(childMounts))
-	for _, mountName := range childMounts {
-		// Build full key for metadata
-		var fullKey string
-		if dirPath == "" || dirPath == "/" {
-			fullKey = mountName
-		} else {
-			fullKey = dirPath + "/" + mountName
-		}
-
-		mountEntries[mountName] = m.createMountMetadata(mountName, fullKey)
-	}
-
-	// Deduplicate: remove real entries that conflict with mounts (mount shadows)
-	filtered := make([]*data.Metadata, 0, len(entries))
-	for _, entry := range entries {
-		// Extract base name from entry key
-		baseName := entry.Key
-		if idx := strings.LastIndex(entry.Key, "/"); idx >= 0 {
-			baseName = entry.Key[idx+1:]
-		}
-
-		// Skip if mount exists with same name (mount shadows directory)
-		if _, isMountPoint := mountEntries[baseName]; !isMountPoint {
-			filtered = append(filtered, entry)
-		}
-	}
-
-	// Combine filtered entries + mount entries
-	result := make([]*data.Metadata, 0, len(filtered)+len(mountEntries))
-	result = append(result, filtered...)
-	for _, mountMeta := range mountEntries {
-		result = append(result, mountMeta)
-	}
-
-	// Sort by key for deterministic output
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Key < result[j].Key
-	})
-
-	return result
+	return m.injectMountEntries(path, metas), nil
 }
 
 // CreateDirectory creates a new directory at the specified path.
 // Returns an error if the directory already exists or cannot be created.
-func (m *Mount) CreateDirectory(traversal context.TraversalContext) error {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.CreateDirectory(mountTraversal)
+func (m *Mount) CreateDirectory(ctx context.Context, path string) (*data.Metadata, error) {
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		// Delegate to child mount but don't return immediately
+		meta, err := mount.CreateDirectory(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		// writing back data  from a child mount into the root
+		if m.Metadata != nil {
+			// We only need to check if cascading is enabled when
+			if m.Options.Cascading {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				// Clone metadata and adjust path prefix
+				prefix := strings.TrimSuffix(strings.TrimSuffix(path, relativePath), "/")
+				syncMeta := meta.Clone(&data.MetadataUpdate{
+					Mask: data.MetadataUpdateKey,
+					Metadata: &data.Metadata{
+						Key: prefix + "/" + meta.Key,
+					},
+				})
+				if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, syncMeta); syncErr != nil && syncErr != data.ErrExist {
+					// TODO :: Missing internal log for tracking internal errors
+					fmt.Printf("WARNING: Failed to cascade metadata for '%s': %v\n", path, syncErr)
+				}
+			}
+		}
+
+		if ok, emitErr := m.emitNotificationEvent(ctx, notification.NotificationTypeCreated, path, true, 0); ok && emitErr != nil {
+			// TODO :: Missing internal log for tracking internal errors
+			fmt.Printf("Warning: Failed to emit notification event: %v", emitErr)
+		}
+
+		return meta, nil
 	}
 	// Throw if mountpoint is marked as readonly
-	if m.isReadonly() {
-		return errors.ErrMountIsReadonly
+	if m.Options.IsReadOnly {
+		return nil, errors.ErrMountIsReadonly
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	namespace := m.Options.Namespace
-	key := traversal.RelativePath()
-
-	// Check path constraints
-	if err := m.validatePathLength(key); err != nil {
-		return err
+	// Check path to validate against constraints
+	if err := m.validatePathLength(path); err != nil {
+		return nil, fmt.Errorf("failed to validate path: %v", err)
 	}
-	if err := m.validatePathDepth(key); err != nil {
-		return err
+	if err := m.validatePathDepth(path); err != nil {
+		return nil, fmt.Errorf("failed to validate path: %v", err)
 	}
-
 	// Check supported service operations
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationCreate) {
-		return errors.ErrOperationNotSupported
+		return nil, errors.ErrOperationNotSupported
 	}
 
 	// Create directory in ObjectStorage (use directory mode 0755 | ModeDir)
-	stat, err := m.ObjectStorage.CreateObject(traversal, namespace, key, data.FileMode(0755)|data.ModeDir)
+	stat, err := m.ObjectStorage.CreateObject(ctx, m.Options.Namespace, path, data.FileMode(0755)|data.ModeDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	// Sync to MetadataService if available
+	meta := stat.ToMetadata()
 	if m.Metadata != nil {
-		meta := stat.ToMetadata()
-		if syncErr := m.Metadata.CreateMeta(traversal, namespace, meta); syncErr != nil && syncErr != data.ErrExist {
+		if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
 			// TODO :: Missing internal log for tracking internal errors
 			fmt.Printf("WARNING: Failed to sync directory creation to MetadataService: %v\n", syncErr)
 		}
 	}
 
-	return nil
+	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeCreated, path, true, 0); ok && err != nil {
+		return nil, err
+	}
+
+	return meta, nil
 }
 
 // RemoveDirectory removes an empty directory at the specified path.
 // Returns an error if the directory is not empty or doesn't exist.
-func (m *Mount) RemoveDirectory(traversal context.TraversalContext, force bool) error {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.RemoveDirectory(mountTraversal, force)
+func (m *Mount) RemoveDirectory(ctx context.Context, path string, force bool) error {
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		// Delegate to child mount but don't return immediately
+		if err := mount.RemoveDirectory(ctx, path, force); err != nil {
+			return err
+		}
+		// Writing back data from a child mount into the root
+		if m.Metadata != nil {
+			// We only need to check if cascading is enabled when
+			if m.Options.Cascading {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				// Sync deletion to MetadataService
+				if syncErr := m.Metadata.DeleteMeta(ctx, m.Options.Namespace, path); syncErr != nil && syncErr != data.ErrNotExist {
+					// TODO :: Missing internal log for tracking internal errors
+					fmt.Printf("WARNING: Failed to sync directory deletion to MetadataService: %v\n", syncErr)
+				}
+			}
+		}
+
+		if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeDeleted, path, true, 0); ok && err != nil {
+			return err
+		}
+
+		return nil
 	}
 	// Throw if mountpoint is marked as readonly
-	if m.isReadonly() {
+	if m.Options.IsReadOnly {
 		return errors.ErrMountIsReadonly
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	namespace := m.Options.Namespace
-	key := traversal.RelativePath()
-
 	// Check supported service operations
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationDelete) {
 		return errors.ErrOperationNotSupported
 	}
-
 	// Delete directory from ObjectStorage
-	err := m.ObjectStorage.DeleteObject(traversal, namespace, key, force)
+	err := m.ObjectStorage.DeleteObject(ctx, m.Options.Namespace, path, force)
 	if err != nil {
 		return err
 	}
-
 	// Sync deletion to MetadataService if available
 	if m.Metadata != nil {
-		if syncErr := m.Metadata.DeleteMeta(traversal, namespace, key); syncErr != nil && syncErr != data.ErrNotExist {
+		if syncErr := m.Metadata.DeleteMeta(ctx, m.Options.Namespace, path); syncErr != nil && syncErr != data.ErrNotExist {
 			// TODO :: Missing internal log for tracking internal errors
 			fmt.Printf("WARNING: Failed to sync directory deletion to MetadataService: %v\n", syncErr)
 		}
+	}
+
+	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeDeleted, path, true, 0); ok && err != nil {
+		return err
 	}
 
 	return nil
@@ -622,40 +636,59 @@ func (m *Mount) RemoveDirectory(traversal context.TraversalContext, force bool) 
 
 // UnlinkFile removes a file at the specified path.
 // Returns an error if the path is a directory or doesn't exist.
-func (m *Mount) UnlinkFile(traversal context.TraversalContext) error {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.UnlinkFile(mountTraversal)
+func (m *Mount) UnlinkFile(ctx context.Context, path string) error {
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		if err := mount.UnlinkFile(ctx, path); err != nil {
+			return err
+		}
+		// Writing back data from a child mount into the root
+		if m.Metadata != nil {
+			// We only need to check if cascading is enabled when
+			if m.Options.Cascading {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				// Sync deletion to MetadataService
+				if syncErr := m.Metadata.DeleteMeta(ctx, m.Options.Namespace, path); syncErr != nil && syncErr != data.ErrNotExist {
+					// TODO :: Missing internal log for tracking internal errors
+					fmt.Printf("WARNING: Failed to sync directory deletion to MetadataService: %v\n", syncErr)
+				}
+			}
+		}
+
+		if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeDeleted, path, false, 0); ok && err != nil {
+			return err
+		}
+
+		return nil
 	}
 	// Throw if mountpoint is marked as readonly
-	if m.isReadonly() {
+	if m.Options.IsReadOnly {
 		return errors.ErrMountIsReadonly
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	namespace := m.Options.Namespace
-	key := traversal.RelativePath()
-
 	// Check supported service operations
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationDelete) {
 		return errors.ErrOperationNotSupported
 	}
-
 	// Delete from ObjectStorage
-	err := m.ObjectStorage.DeleteObject(traversal, namespace, key, false)
+	err := m.ObjectStorage.DeleteObject(ctx, m.Options.Namespace, path, false)
 	if err != nil {
 		return err
 	}
-
 	// Sync deletion to MetadataService if available
 	if m.Metadata != nil {
-		if syncErr := m.Metadata.DeleteMeta(traversal, namespace, key); syncErr != nil && syncErr != data.ErrNotExist {
+		if syncErr := m.Metadata.DeleteMeta(ctx, m.Options.Namespace, path); syncErr != nil && syncErr != data.ErrNotExist {
 			// TODO :: Missing internal log for tracking internal errors
 			fmt.Printf("WARNING: Failed to sync file deletion to MetadataService: %v\n", syncErr)
 		}
+	}
+
+	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeDeleted, path, false, 0); ok && err != nil {
+		return err
 	}
 
 	return nil
@@ -665,74 +698,7 @@ func (m *Mount) UnlinkFile(traversal context.TraversalContext) error {
 // Returns an error if the operation cannot be completed.
 // This implementation uses a copy-and-delete strategy which works across different mounts
 // but is not atomic and may not be optimal for large files.
-func (m *Mount) Rename(traversal context.TraversalContext, path string) error {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.Rename(mountTraversal, path)
-	}
-	// Throw if mountpoint is marked as readonly
-	if m.isReadonly() {
-		return errors.ErrMountIsReadonly
-	}
-	// Only lock after checks for traversing submounts is done.
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Check supported service operations
-	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
-	if !caps.SupportsOperation(service.ObjectStorageOperationWrite) {
-		return errors.ErrOperationNotSupported
-	}
-
+func (m *Mount) Rename(ctx context.Context, sourcePath, targetPath string) error {
 	// TODO: Implement actual rename logic
-	return nil
-}
-
-// validatePathLength checks if the path exceeds the maximum path length constraint
-func (m *Mount) validatePathLength(path string) error {
-	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
-	maxLength := caps.ObjectStorage.Constraints.MaxPathLength
-	if maxLength > 0 && len(path) > maxLength {
-		return fmt.Errorf("%w: path length %d exceeds maximum %d", errors.ErrPathTooLong, len(path), maxLength)
-	}
-	return nil
-}
-
-// validatePathDepth checks if the path exceeds the maximum depth constraint
-func (m *Mount) validatePathDepth(path string) error {
-	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
-	maxDepth := caps.ObjectStorage.Constraints.MaxPathDepth
-	if maxDepth > 0 {
-		// Count directory separators to determine depth
-		// Empty path = depth 0, "a" = depth 1, "a/b" = depth 2, etc.
-		depth := 0
-		if path != "" {
-			depth = 1
-			for _, char := range path {
-				if char == '/' {
-					depth++
-				}
-			}
-		}
-		if depth > maxDepth {
-			return fmt.Errorf("%w: path depth %d exceeds maximum %d", errors.ErrPathTooDeep, depth, maxDepth)
-		}
-	}
-	return nil
-}
-
-// validateObjectSize checks if the object size violates size constraints
-func (m *Mount) validateObjectSize(size int64) error {
-	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
-	constraints := caps.ObjectStorage.Constraints
-
-	if constraints.MinObjectSize > 0 && size < constraints.MinObjectSize {
-		return fmt.Errorf("%w: object size %d is below minimum %d", errors.ErrObjectTooSmall, size, constraints.MinObjectSize)
-	}
-
-	if constraints.MaxObjectSize > 0 && size > constraints.MaxObjectSize {
-		return fmt.Errorf("%w: object size %d exceeds maximum %d", errors.ErrObjectTooLarge, size, constraints.MaxObjectSize)
-	}
-
 	return nil
 }

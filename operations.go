@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"context"
+	"strings"
 
 	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
@@ -57,7 +58,8 @@ func (vfs *virtualFileSystemImpl) ReadFile(ctx context.Context, path string, off
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.ReadFile(traversal.WithAbsolute(ctx, path), offset, size)
+	relativePath := strings.TrimPrefix(path, "/")
+	return root.ReadFile(ctx, relativePath, offset, size)
 }
 
 // Write writes data to the file at path starting at offset.
@@ -74,7 +76,8 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.WriteFile(traversal.WithAbsolute(ctx, path), offset, buffer)
+	relativePath := strings.TrimPrefix(path, "/")
+	return root.WriteFile(ctx, relativePath, offset, buffer)
 }
 
 // Stat returns file information for the given path.
@@ -91,7 +94,8 @@ func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string)
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.StatMetadata(traversal.WithAbsolute(ctx, path))
+	relativePath := strings.TrimPrefix(path, "/")
+	return root.StatMetadata(ctx, relativePath)
 }
 
 // Lookup checks if a file or directory exists at the given path.
@@ -108,7 +112,8 @@ func (vfs *virtualFileSystemImpl) LookupMetadata(ctx context.Context, path strin
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.LookupMetadata(traversal.WithAbsolute(ctx, path))
+	relativePath := strings.TrimPrefix(path, "/")
+	return root.LookupMetadata(ctx, relativePath, false)
 }
 
 // ReadDirectory returns a list of entries in the directory at path.
@@ -125,7 +130,10 @@ func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.ReadDirectory(traversal.WithAbsolute(ctx, path))
+	relativePath := strings.TrimPrefix(path, "/")
+	metas, err := root.ReadDirectory(ctx, relativePath)
+
+	return metas, err
 }
 
 // CreateDirectory creates a new directory at the specified path.
@@ -142,7 +150,9 @@ func (vfs *virtualFileSystemImpl) CreateDirectory(ctx context.Context, path stri
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.CreateDirectory(traversal.WithAbsolute(ctx, path))
+	relativePath := strings.TrimPrefix(path, "/")
+	_, err = root.CreateDirectory(ctx, relativePath)
+	return err
 }
 
 // RemoveDirectory removes an empty directory at the specified path.
@@ -159,7 +169,8 @@ func (vfs *virtualFileSystemImpl) RemoveDirectory(ctx context.Context, path stri
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.RemoveDirectory(traversal.WithAbsolute(ctx, path), force)
+	relativePath := strings.TrimPrefix(path, "/")
+	return root.RemoveDirectory(ctx, relativePath, force)
 }
 
 // UnlinkFile removes a file at the specified path.
@@ -176,7 +187,8 @@ func (vfs *virtualFileSystemImpl) UnlinkFile(ctx context.Context, path string) e
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.UnlinkFile(traversal.WithAbsolute(ctx, path))
+	relativePath := strings.TrimPrefix(path, "/")
+	return root.UnlinkFile(ctx, relativePath)
 }
 
 // Rename moves or renames a file or directory from oldPath to newPath.
@@ -195,5 +207,7 @@ func (vfs *virtualFileSystemImpl) Rename(ctx context.Context, oldPath string, ne
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.Rename(traversal.WithAbsolute(ctx, oldPath), newPath)
+	relativeOldPath := strings.TrimPrefix(oldPath, "/")
+	relativeNewPath := strings.TrimPrefix(newPath, "/")
+	return root.Rename(ctx, relativeOldPath, relativeNewPath)
 }

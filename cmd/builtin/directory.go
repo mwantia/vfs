@@ -2,7 +2,7 @@ package builtin
 
 import (
 	"fmt"
-	"path/filepath"
+	pathpkg "path"
 
 	"github.com/mwantia/vfs/cmd"
 )
@@ -24,8 +24,8 @@ func lsCmd() *cmd.Command {
 			}
 
 			// Convert relative to absolute
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(vfs.GetContext().GetCurrentDirectory(), path)
+			if !pathpkg.IsAbs(path) {
+				path = pathpkg.Join(vfs.GetContext().GetCurrentDirectory(), path)
 			}
 
 			// Read directory
@@ -118,8 +118,8 @@ func cdCmd() *cmd.Command {
 			path := args[0]
 
 			// Make path absolute if relative
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(vfs.GetContext().GetCurrentDirectory(), path)
+			if !pathpkg.IsAbs(path) {
+				path = pathpkg.Join(vfs.GetContext().GetCurrentDirectory(), path)
 			}
 
 			// Validate path exists and is a directory

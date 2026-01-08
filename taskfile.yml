@@ -24,12 +24,12 @@ tasks:
     test:
         desc: Run tests with race detection
         cmds:
-        - go test -cover -v -race ./...
+        - timeout 60 go test -cover -v -race ./...
 
     test-slim:
         desc: Run all tests
         cmds:
-        - go test ./...
+        - timeout 60 go test ./...
 
     test-coverage-html:
         desc: Generate HTML coverage report

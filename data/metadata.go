@@ -95,7 +95,11 @@ func (m *Metadata) GetType() FileType {
 }
 
 // Clone creates a deep copy of the object info.
-func (m *Metadata) Clone() *Metadata {
+func (m *Metadata) Clone(update *MetadataUpdate) *Metadata {
 	clone := *m
+	if update != nil {
+		update.Apply(&clone)
+	}
+
 	return &clone
 }

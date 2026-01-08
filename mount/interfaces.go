@@ -35,6 +35,44 @@ type MountPoint interface {
 	// Restore
 	Restore(ctx context.Context) error
 
+	// Read reads size bytes from the file at path starting at offset.
+	// Returns the data read or an error if the operation fails.
+	ReadFile(ctx context.Context, path string, offset, size int64) ([]byte, error)
+
+	// Write writes data to the file at path starting at offset.
+	// Returns the number of bytes written or an error if the operation fails.
+	WriteFile(ctx context.Context, path string, offset int64, buffer []byte) (int, error)
+
+	// StatMetadata returns file information for the given path.
+	// Returns an error if the path doesn't exist.
+	StatMetadata(ctx context.Context, path string) (*data.Metadata, error)
+
+	// Lookup checks if a file or directory exists at the given path.
+	// Returns true if the path exists, false otherwise.
+	LookupMetadata(ctx context.Context, path string, quick bool) (bool, error)
+
+	// ReadDirectory returns a list of entries in the directory at path.
+	// Returns an error if the path is not a directory or doesn't exist.
+	ReadDirectory(ctx context.Context, path string) ([]*data.Metadata, error)
+
+	// CreateDirectory creates a new directory at the specified path.
+	// Returns an error if the directory already exists or cannot be created.
+	CreateDirectory(ctx context.Context, path string) (*data.Metadata, error)
+
+	// RemoveDirectory removes an empty directory at the specified path.
+	// Returns an error if the directory is not empty or doesn't exist.
+	RemoveDirectory(ctx context.Context, path string, force bool) error
+
+	// UnlinkFile removes a file at the specified path.
+	// Returns an error if the path is a directory or doesn't exist.
+	UnlinkFile(ctx context.Context, path string) error
+
+	// Rename moves or renames a file or directory from oldPath to newPath.
+	// Returns an error if the operation cannot be completed.
+	// This implementation uses a copy-and-delete strategy which works across different mounts
+	// but is not atomic and may not be optimal for large files.
+	Rename(ctx context.Context, sourcePath, targetPath string) error
+
 	// OpenFile opens a file with the specified access mode flags and returns a file handle.
 	// The returned VirtualFile must be closed by the caller. Use flags to control access.
 	OpenFile(traversal traversal.TraversalContext, flags data.AccessMode) (MountStreamer, error)
@@ -42,44 +80,6 @@ type MountPoint interface {
 	// CloseFile closes an open file handle at the given path.
 	// This may be a no-op for implementations that don't maintain file handles.
 	CloseFile(traversal traversal.TraversalContext, force bool) error
-
-	// Read reads size bytes from the file at path starting at offset.
-	// Returns the data read or an error if the operation fails.
-	ReadFile(traversal traversal.TraversalContext, offset, size int64) ([]byte, error)
-
-	// Write writes data to the file at path starting at offset.
-	// Returns the number of bytes written or an error if the operation fails.
-	WriteFile(traversal traversal.TraversalContext, offset int64, buffer []byte) (int, error)
-
-	// Stat returns file information for the given path.
-	// Returns an error if the path doesn't exist.
-	StatMetadata(traversal traversal.TraversalContext) (*data.Metadata, error)
-
-	// Lookup checks if a file or directory exists at the given path.
-	// Returns true if the path exists, false otherwise.
-	LookupMetadata(traversal traversal.TraversalContext) (bool, error)
-
-	// ReadDirectory returns a list of entries in the directory at path.
-	// Returns an error if the path is not a directory or doesn't exist.
-	ReadDirectory(traversal traversal.TraversalContext) ([]*data.Metadata, error)
-
-	// CreateDirectory creates a new directory at the specified path.
-	// Returns an error if the directory already exists or cannot be created.
-	CreateDirectory(traversal traversal.TraversalContext) error
-
-	// RemoveDirectory removes an empty directory at the specified path.
-	// Returns an error if the directory is not empty or doesn't exist.
-	RemoveDirectory(traversal traversal.TraversalContext, force bool) error
-
-	// UnlinkFile removes a file at the specified path.
-	// Returns an error if the path is a directory or doesn't exist.
-	UnlinkFile(traversal traversal.TraversalContext) error
-
-	// Rename moves or renames a file or directory from oldPath to newPath.
-	// Returns an error if the operation cannot be completed.
-	// This implementation uses a copy-and-delete strategy which works across different mounts
-	// but is not atomic and may not be optimal for large files.
-	Rename(traversal traversal.TraversalContext, path string) error
 }
 
 // Streamer combines all operation interfaces for data-streaming.

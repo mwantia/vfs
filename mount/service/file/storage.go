@@ -174,8 +174,14 @@ func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key st
 			continue // Skip entries with errors
 		}
 
-		// Return just the entry name (direct child), not the full path
-		stats = append(stats, s.driver.toFileStat(entry.Name(), childInfo))
+		// Construct absolute key: parent path + basename
+		absoluteKey := key
+		if absoluteKey != "" {
+			absoluteKey += "/"
+		}
+		absoluteKey += entry.Name()
+
+		stats = append(stats, s.driver.toFileStat(absoluteKey, childInfo))
 	}
 
 	return stats, nil

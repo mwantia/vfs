@@ -2,8 +2,11 @@ package ephemeral
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/extensions/notification"
 	"github.com/mwantia/vfs/mount/service"
 	"github.com/tidwall/btree"
 )
@@ -48,6 +51,7 @@ func (*EphemeralMonolithDriver) GetCapabilities() *service.DriverCapabilities {
 		Type: DriverType,
 		Extensions: []service.ServiceExtension{
 			service.ServiceExtensionMount,
+			service.ServiceExtensionNotification,
 		},
 		ObjectStorage: service.ObjectStorageCapabilities{
 			Operations: []service.ObjectStorageOperation{
@@ -126,6 +130,28 @@ func (d *EphemeralMonolithDriver) GetExtensionService(ext service.ServiceExtensi
 		return &EphemeralMountExtensionService{
 			driver: d,
 		}
+	}
+	if ext == service.ServiceExtensionNotification {
+		service := &EphemeralNotificationExtensionService{
+			driver: d,
+			hub: &EphemeralNotificationHub{
+				subscriptions: make(map[string]*ephemeralSubscription),
+				events:        make([]notification.NotificationEvent, 0),
+			},
+		}
+		service.Subscribe(context.Background(), "/gosync", func(ctx context.Context, event notification.NotificationEvent) error {
+			f, _ := os.OpenFile(
+				"out.log",
+				os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+				0o644,
+			)
+			defer f.Close()
+
+			fmt.Fprintf(f, "Change: %s at %s\n", event.Type, event.AbsolutePath)
+			return nil
+		})
+
+		return service
 	}
 
 	return nil

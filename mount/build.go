@@ -43,6 +43,7 @@ func BuildMount(ctx context.Context, path string, build *builder.MountBuilder) (
 		Options: &MountOptions{
 			Namespace:  build.Options.Namespace,
 			PathPrefix: build.Options.PathPrefix,
+			Cascading:  build.Options.Cascading,
 			IsReadOnly: build.Options.IsReadOnly,
 		},
 		Extensions: make(map[service.ServiceExtension]service.Service),

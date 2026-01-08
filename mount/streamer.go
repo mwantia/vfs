@@ -66,7 +66,7 @@ func (tms *traversalMountStreamer) Read(p []byte) (n int, err error) {
 	}
 
 	// Read from mount
-	buffer, err := tms.mnt.ReadFile(tms.traversal, tms.offset, int64(len(p)))
+	buffer, err := tms.mnt.ReadFile(tms.traversal, tms.traversal.RelativePath(), tms.offset, int64(len(p)))
 	if err != nil {
 		return 0, err
 	}
@@ -101,7 +101,7 @@ func (tms *traversalMountStreamer) Write(p []byte) (n int, err error) {
 	}
 
 	// Write to mount
-	n, err = tms.mnt.WriteFile(tms.traversal, tms.offset, p)
+	n, err = tms.mnt.WriteFile(tms.traversal, tms.traversal.RelativePath(), tms.offset, p)
 	if err != nil {
 		return 0, err
 	}
@@ -129,7 +129,7 @@ func (tms *traversalMountStreamer) Seek(offset int64, whence int) (int64, error)
 		newOffset = tms.offset + offset
 	case io.SeekEnd:
 		// Need to get file size to seek from end
-		meta, err := tms.mnt.StatMetadata(tms.traversal)
+		meta, err := tms.mnt.StatMetadata(tms.traversal, tms.traversal.RelativePath())
 		if err != nil {
 			return 0, err
 		}

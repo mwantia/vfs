@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 
 	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/errors"
@@ -13,26 +11,6 @@ import (
 	"github.com/mwantia/vfs/mount/extensions"
 	"github.com/mwantia/vfs/mount/service"
 )
-
-type Mount struct {
-	mu         sync.RWMutex
-	fstab      map[string]*Mount
-	uris       []string
-	createTime time.Time
-
-	MountPoint string
-	Options    *MountOptions
-
-	ObjectStorage service.ObjectStorageService
-	Metadata      service.MetadataService
-	Extensions    map[service.ServiceExtension]service.Service
-}
-
-type MountOptions struct {
-	Namespace  string
-	PathPrefix string
-	IsReadOnly bool
-}
 
 // Health returns the basic and fastest result to check the lifecycle and availablility of this Service.
 func (m *Mount) Health() bool {
@@ -165,7 +143,7 @@ func (m *Mount) Shutdown(ctx context.Context) error {
 // Options can be used to configure the mount (e.g., read-only).
 func (m *Mount) Mount(ctx context.Context, path string, steps ...builder.MountStep) error {
 	//
-	if mount, mountpoint := m.resolveMountPoint(ctx, path); path != mountpoint {
+	if mount, mountpoint := m.resolveMountPoint(path); path != mountpoint {
 		return mount.Mount(ctx, mountpoint)
 	}
 	// Only lock after checks for traversing submounts is done.
@@ -203,7 +181,7 @@ func (m *Mount) Mount(ctx context.Context, path string, steps ...builder.MountSt
 // Returns an error if the path is not mounted or has child mounts.
 func (m *Mount) Unmount(ctx context.Context, path string, force bool) error {
 	//
-	if mount, mountpoint := m.resolveMountPoint(ctx, path); path != mountpoint {
+	if mount, mountpoint := m.resolveMountPoint(path); path != mountpoint {
 		return mount.Unmount(ctx, mountpoint, force)
 	}
 	// Only lock after checks for traversing submounts is done.
@@ -296,53 +274,6 @@ func (m *Mount) restoreMountPoint(ctx context.Context, path string, steps ...bui
 
 	m.fstab[path] = mount
 	return nil
-}
-
-// isReadonly
-func (m *Mount) isReadonly() bool {
-	return m.Options.IsReadOnly
-}
-
-func (m *Mount) resolveMountPoint(ctx context.Context, path string) (MountPoint, string) {
-	path = strings.TrimSpace(path)
-	if path != "" && path != "/" {
-		m.mu.RLock()
-		defer m.mu.RUnlock()
-
-		var bestMatch MountPoint
-		var bestPrefix string
-
-		for path, mount := range m.fstab {
-			// Normalize paths for comparison
-			normalizedPath := strings.Trim(path, "/")
-			normalizedRelative := strings.Trim(path, "/")
-			// Check if mountpath is a matching prefix
-			if normalizedRelative == normalizedPath || strings.HasPrefix(normalizedRelative, normalizedPath+"/") {
-				// Keep the longest match
-				if len(normalizedPath) > len(bestPrefix) {
-					bestMatch = mount
-					bestPrefix = normalizedPath
-				}
-			}
-		}
-		// Found a matching submount to traverse to
-		if bestPrefix != "" {
-			prefix := strings.Trim(bestPrefix, "/")
-			newPath := path
-			// Remove the prefix and any following slash
-			if prefix != "" {
-				if after, ok := strings.CutPrefix(newPath, prefix+"/"); ok {
-					newPath = after
-				} else if newPath == prefix {
-					newPath = ""
-				}
-			}
-
-			return bestMatch, newPath
-		}
-	}
-	// No submount found, handle locally
-	return m, path
 }
 
 // resolve

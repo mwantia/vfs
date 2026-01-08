@@ -83,17 +83,20 @@ func (s *S3ObjectStorageService) ReadObject(ctx context.Context, ns, key string,
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
+	bucket := s.driver.cfg.BucketName
 	named := s.buildNamedKey(ns, key)
 
 	// Get object info to check if it exists and is not a directory
-	objInfo, err := s.driver.client.StatObject(ctx, s.driver.cfg.BucketName, named, minio.StatObjectOptions{})
+	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
 	if err != nil {
 		errResponse := minio.ToErrorResponse(err)
 		if errResponse.Code == "NoSuchKey" {
 			// Check if it's an implicit directory
 			prefix := named + "/"
-			objects := s.driver.client.ListObjects(ctx, s.driver.cfg.BucketName,
-				minio.ListObjectsOptions{Prefix: prefix, MaxKeys: 1})
+			objects := s.driver.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+				Prefix:  prefix,
+				MaxKeys: 1,
+			})
 
 			for range objects {
 				// Has children - it's an implicit directory
@@ -127,7 +130,7 @@ func (s *S3ObjectStorageService) ReadObject(ctx context.Context, ns, key string,
 		}
 	}
 
-	object, err := s.driver.client.GetObject(ctx, s.driver.cfg.BucketName, named, opts)
+	object, err := s.driver.client.GetObject(ctx, bucket, named, opts)
 	if err != nil {
 		return 0, err
 	}
@@ -145,11 +148,12 @@ func (s *S3ObjectStorageService) WriteObject(ctx context.Context, ns, key string
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
+	bucket := s.driver.cfg.BucketName
 	named := s.buildNamedKey(ns, key)
 
 	// S3 doesn't support partial writes - we need to read-modify-write
 	// First, check if object exists
-	objInfo, err := s.driver.client.StatObject(ctx, s.driver.cfg.BucketName, named, minio.StatObjectOptions{})
+	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
 	if err != nil {
 		errResponse := minio.ToErrorResponse(err)
 		if errResponse.Code == "NoSuchKey" {
@@ -166,7 +170,7 @@ func (s *S3ObjectStorageService) WriteObject(ctx context.Context, ns, key string
 	// Read existing content
 	var existingData []byte
 	if objInfo.Size > 0 {
-		object, err := s.driver.client.GetObject(ctx, s.driver.cfg.BucketName, named, minio.GetObjectOptions{})
+		object, err := s.driver.client.GetObject(ctx, bucket, named, minio.GetObjectOptions{})
 		if err != nil {
 			return 0, err
 		}
@@ -190,18 +194,11 @@ func (s *S3ObjectStorageService) WriteObject(ctx context.Context, ns, key string
 	// Write new data at offset
 	copy(newData[offset:], buffer)
 
+	reader := strings.NewReader(string(newData))
 	// Upload the modified object (preserve content type)
-	_, err = s.driver.client.PutObject(
-		ctx,
-		s.driver.cfg.BucketName,
-		named,
-		strings.NewReader(string(newData)),
-		int64(len(newData)),
-		minio.PutObjectOptions{
-			ContentType: objInfo.ContentType,
-		},
-	)
-	if err != nil {
+	if _, err = s.driver.client.PutObject(ctx, bucket, named, reader, int64(len(newData)), minio.PutObjectOptions{
+		ContentType: objInfo.ContentType,
+	}); err != nil {
 		return 0, err
 	}
 
@@ -212,17 +209,20 @@ func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, ns, key strin
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
+	bucket := s.driver.cfg.BucketName
 	named := s.buildNamedKey(ns, key)
 
 	// Try to stat the object
-	objInfo, err := s.driver.client.StatObject(ctx, s.driver.cfg.BucketName, named, minio.StatObjectOptions{})
+	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
 	if err != nil {
 		errResponse := minio.ToErrorResponse(err)
 		if errResponse.Code == "NoSuchKey" {
 			// Check if it's an implicit directory
 			prefix := named + "/"
-			objects := s.driver.client.ListObjects(ctx, s.driver.cfg.BucketName,
-				minio.ListObjectsOptions{Prefix: prefix, MaxKeys: 1})
+			objects := s.driver.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+				Prefix:  prefix,
+				MaxKeys: 1,
+			})
 
 			hasChildren := false
 			for range objects {
@@ -240,21 +240,24 @@ func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, ns, key strin
 			}
 
 			// Force delete all children (recursive)
-			objectsCh := s.driver.client.ListObjects(ctx, s.driver.cfg.BucketName,
-				minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
+			childObjects := s.driver.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+				Prefix:    prefix,
+				Recursive: true,
+			})
 
-			for object := range objectsCh {
+			for object := range childObjects {
 				if object.Err != nil {
 					return object.Err
 				}
-				if err := s.driver.client.RemoveObject(ctx, s.driver.cfg.BucketName,
-					object.Key, minio.RemoveObjectOptions{}); err != nil {
+
+				if err := s.driver.client.RemoveObject(ctx, bucket, object.Key, minio.RemoveObjectOptions{}); err != nil {
 					return err
 				}
 			}
 
 			return nil
 		}
+
 		return err
 	}
 
@@ -266,31 +269,34 @@ func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, ns, key strin
 
 		// Delete directory marker and all children
 		prefix := named + "/"
-		objectsCh := s.driver.client.ListObjects(ctx, s.driver.cfg.BucketName,
-			minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
+		objects := s.driver.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+			Prefix:    prefix,
+			Recursive: true,
+		})
 
-		for object := range objectsCh {
+		for object := range objects {
 			if object.Err != nil {
 				return object.Err
 			}
-			if err := s.driver.client.RemoveObject(ctx, s.driver.cfg.BucketName,
-				object.Key, minio.RemoveObjectOptions{}); err != nil {
+
+			if err := s.driver.client.RemoveObject(ctx, bucket, object.Key, minio.RemoveObjectOptions{}); err != nil {
 				return err
 			}
 		}
 
 		// Delete the directory marker itself
-		return s.driver.client.RemoveObject(ctx, s.driver.cfg.BucketName, named, minio.RemoveObjectOptions{})
+		return s.driver.client.RemoveObject(ctx, bucket, named, minio.RemoveObjectOptions{})
 	}
 
 	// Delete single file
-	return s.driver.client.RemoveObject(ctx, s.driver.cfg.BucketName, named, minio.RemoveObjectOptions{})
+	return s.driver.client.RemoveObject(ctx, bucket, named, minio.RemoveObjectOptions{})
 }
 
 func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
+	bucket := s.driver.cfg.BucketName
 	named := s.buildNamedKey(ns, key)
 
 	// Build prefix for listing
@@ -300,16 +306,15 @@ func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string
 	}
 
 	// List objects with Recursive: false to get direct children only
-	objectsCh := s.driver.client.ListObjects(ctx, s.driver.cfg.BucketName,
-		minio.ListObjectsOptions{
-			Prefix:    prefix,
-			Recursive: false, // Direct children only
-		})
+	objects := s.driver.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: false, // Direct children only
+	})
 
 	var stats []*data.FileStat
 	seen := make(map[string]bool) // Deduplicate
 
-	for object := range objectsCh {
+	for object := range objects {
 		if object.Err != nil {
 			return nil, object.Err
 		}
@@ -327,31 +332,27 @@ func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string
 		}
 		seen[relPath] = true
 
-		// Use relPath directly as the key (relative to listed directory)
-		// NOT the full absolute path from root!
-
-		// Get detailed object info for FileStat
-		objInfo, err := s.driver.client.StatObject(ctx, s.driver.cfg.BucketName, object.Key, minio.StatObjectOptions{})
-		if err == nil {
-			stats = append(stats, objectInfoToFileStat(relPath, objInfo))
-		} else {
-			// Fallback: synthesize from list result
-			isDir := strings.HasSuffix(object.Key, "/") && object.Size == 0
-			mode := data.FileMode(0644)
-			if isDir {
-				mode = data.ModeDir | 0755
-			}
-
-			stats = append(stats, &data.FileStat{
-				Key:         relPath,
-				Size:        object.Size,
-				Mode:        mode,
-				ModifyTime:  object.LastModified,
-				CreateTime:  object.LastModified,
-				ContentType: data.ContentType(object.ContentType),
-				ETag:        object.ETag,
-			})
+		// Construct absolute key: parent path + basename
+		absoluteKey := key
+		if absoluteKey != "" {
+			absoluteKey += "/"
 		}
+		absoluteKey += relPath
+
+		mode := data.FileMode(0644)
+		if strings.HasSuffix(object.Key, "/") {
+			mode = data.ModeDir | 0755
+		}
+
+		stats = append(stats, &data.FileStat{
+			Key:         absoluteKey,
+			Size:        object.Size,
+			Mode:        mode,
+			ModifyTime:  object.LastModified,
+			CreateTime:  object.LastModified,
+			ContentType: data.ContentType(object.ContentType),
+			ETag:        object.ETag,
+		})
 	}
 
 	// If no children found, check if the directory itself exists before returning ErrNotExist
@@ -362,8 +363,7 @@ func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string
 			dirKey += "/"
 		}
 
-		_, err := s.driver.client.StatObject(ctx, s.driver.cfg.BucketName, dirKey, minio.StatObjectOptions{})
-		if err == nil {
+		if _, err := s.driver.client.StatObject(ctx, bucket, dirKey, minio.StatObjectOptions{}); err == nil {
 			// Directory marker exists, return empty list
 			return stats, nil
 		}
@@ -379,10 +379,11 @@ func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string)
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
+	bucket := s.driver.cfg.BucketName
 	named := s.buildNamedKey(ns, key)
 
 	// Try to stat the object directly
-	objInfo, err := s.driver.client.StatObject(ctx, s.driver.cfg.BucketName, named, minio.StatObjectOptions{})
+	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
 	if err == nil {
 		return objectInfoToFileStat(key, objInfo), nil
 	}
@@ -396,7 +397,7 @@ func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string)
 			dirKey += "/"
 		}
 
-		objInfo, err = s.driver.client.StatObject(ctx, s.driver.cfg.BucketName, dirKey, minio.StatObjectOptions{})
+		objInfo, err = s.driver.client.StatObject(ctx, bucket, dirKey, minio.StatObjectOptions{})
 		if err == nil {
 			// Found explicit directory marker
 			return &data.FileStat{
@@ -410,8 +411,10 @@ func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string)
 
 		// Check for implicit directory (has children with prefix)
 		prefix := named + "/"
-		objects := s.driver.client.ListObjects(ctx, s.driver.cfg.BucketName,
-			minio.ListObjectsOptions{Prefix: prefix, MaxKeys: 1})
+		objects := s.driver.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
+			Prefix:  prefix,
+			MaxKeys: 1,
+		})
 
 		for range objects {
 			// Has children - it's an implicit directory
@@ -435,10 +438,11 @@ func (s *S3ObjectStorageService) TruncateObject(ctx context.Context, ns, key str
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
+	bucket := s.driver.cfg.BucketName
 	named := s.buildNamedKey(ns, key)
 
 	// Check if object exists
-	objInfo, err := s.driver.client.StatObject(ctx, s.driver.cfg.BucketName, named, minio.StatObjectOptions{})
+	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
 	if err != nil {
 		errResponse := minio.ToErrorResponse(err)
 		if errResponse.Code == "NoSuchKey" {
@@ -462,7 +466,7 @@ func (s *S3ObjectStorageService) TruncateObject(ctx context.Context, ns, key str
 	if size > 0 {
 		if objInfo.Size > 0 {
 			// Read existing content
-			object, err := s.driver.client.GetObject(ctx, s.driver.cfg.BucketName, named, minio.GetObjectOptions{})
+			object, err := s.driver.client.GetObject(ctx, bucket, named, minio.GetObjectOptions{})
 			if err != nil {
 				return err
 			}
@@ -486,17 +490,11 @@ func (s *S3ObjectStorageService) TruncateObject(ctx context.Context, ns, key str
 		}
 	}
 
+	reader := strings.NewReader(string(newData))
 	// Upload the truncated/expanded object (preserve content type)
-	_, err = s.driver.client.PutObject(
-		ctx,
-		s.driver.cfg.BucketName,
-		named,
-		strings.NewReader(string(newData)),
-		int64(len(newData)),
-		minio.PutObjectOptions{
-			ContentType: objInfo.ContentType,
-		},
-	)
+	_, err = s.driver.client.PutObject(ctx, bucket, named, reader, int64(len(newData)), minio.PutObjectOptions{
+		ContentType: objInfo.ContentType,
+	})
 
 	return err
 }

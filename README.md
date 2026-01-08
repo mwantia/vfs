@@ -150,7 +150,7 @@ func (m *MyMount) Stat(ctx context.Context, path string) (*vfs.VirtualObjectInfo
 
     return &vfs.VirtualObjectInfo{
         Path:    path,
-        Name:    filepath.Base(path),
+        Name:    pathpkg.Base(path),
         Type:    vfs.ObjectTypeFile,
         Size:    int64(len(data)),
         Mode:    0644,
@@ -164,10 +164,10 @@ func (m *MyMount) List(ctx context.Context, path string) ([]*vfs.VirtualObjectIn
 
     var infos []*vfs.VirtualObjectInfo
     for p, data := range m.files {
-        if filepath.Dir(p) == path {
+        if pathpkg.Dir(p) == path {
             infos = append(infos, &vfs.VirtualObjectInfo{
                 Path:    p,
-                Name:    filepath.Base(p),
+                Name:    pathpkg.Base(p),
                 Type:    vfs.ObjectTypeFile,
                 Size:    int64(len(data)),
                 Mode:    0644,
