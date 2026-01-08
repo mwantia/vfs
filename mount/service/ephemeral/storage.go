@@ -15,14 +15,14 @@ func (s *EphemeralObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (eos *EphemeralObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 
 	// Check if object already exists
 	named := service.NamedKey(ns, key, ":")
 	if _, exists := eos.driver.stats[named]; exists {
-		return nil, data.ErrExist
+		return data.FileStat{}, data.ErrExist
 	}
 
 	// Verify parent directory exists (except for root)
@@ -31,17 +31,17 @@ func (eos *EphemeralObjectStorageService) CreateObject(ctx context.Context, ns, 
 		parentNamed := service.NamedKey(ns, parentKey, ":")
 		parentStat, exists := eos.driver.stats[parentNamed]
 		if !exists {
-			return nil, data.ErrNotExist
+			return data.FileStat{}, data.ErrNotExist
 		}
 
 		if !parentStat.Mode.IsDir() {
-			return nil, data.ErrNotDirectory
+			return data.FileStat{}, data.ErrNotDirectory
 		}
 	}
 
 	// Create new FileStat
 	now := time.Now()
-	stat := &data.FileStat{
+	stat := data.FileStat{
 		Key:        key,
 		Mode:       mode,
 		Size:       0,
@@ -193,7 +193,7 @@ func (eos *EphemeralObjectStorageService) DeleteObject(ctx context.Context, ns, 
 	return nil
 }
 
-func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
 	eos.driver.mu.RLock()
 	defer eos.driver.mu.RUnlock()
 
@@ -207,7 +207,7 @@ func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, k
 
 		// If it's a file, return single entry
 		if !stat.Mode.IsDir() {
-			return []*data.FileStat{stat}, nil
+			return []data.FileStat{stat}, nil
 		}
 	}
 
@@ -219,7 +219,7 @@ func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, k
 	prefixLen := len(prefix)
 
 	// Use map to deduplicate direct children
-	children := make(map[string]*data.FileStat)
+	children := make(map[string]data.FileStat)
 
 	for childKey, stat := range eos.driver.stats {
 		// Check if this key belongs to our directory
@@ -259,7 +259,7 @@ func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, k
 	}
 
 	// Convert map to slice
-	result := make([]*data.FileStat, 0, len(children))
+	result := make([]data.FileStat, 0, len(children))
 	for _, stat := range children {
 		result = append(result, stat)
 	}
@@ -267,7 +267,7 @@ func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, k
 	return result, nil
 }
 
-func (eos *EphemeralObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
 	eos.driver.mu.RLock()
 	defer eos.driver.mu.RUnlock()
 
@@ -275,7 +275,7 @@ func (eos *EphemeralObjectStorageService) HeadObject(ctx context.Context, ns, ke
 	named := service.NamedKey(ns, key, ":")
 	stat, exists := eos.driver.stats[named]
 	if !exists {
-		return nil, data.ErrNotExist
+		return data.FileStat{}, data.ErrNotExist
 	}
 
 	return stat, nil

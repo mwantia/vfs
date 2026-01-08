@@ -18,7 +18,7 @@ const (
 )
 
 // GetAttribute safely retrieves the attribute with a default value.
-func (m *Metadata) GetAttribute(key string, defaultValue string) string {
+func (m Metadata) GetAttribute(key string, defaultValue string) string {
 	if m.Attributes == nil {
 		return defaultValue
 	}
@@ -31,7 +31,7 @@ func (m *Metadata) GetAttribute(key string, defaultValue string) string {
 }
 
 // SetAttribute safely sets attribute, initializing the map if needed.
-func (m *Metadata) SetAttribute(key, value string) {
+func (m Metadata) SetAttribute(key, value string) {
 	if m.Attributes == nil {
 		m.Attributes = make(map[string]string)
 	}
@@ -41,7 +41,7 @@ func (m *Metadata) SetAttribute(key, value string) {
 }
 
 // DeleteAttribute removes a attribute key.
-func (m *Metadata) DeleteAttribute(key string) {
+func (m Metadata) DeleteAttribute(key string) {
 	if m.Attributes != nil {
 		delete(m.Attributes, key)
 		m.ModifyTime = time.Now()
@@ -49,7 +49,7 @@ func (m *Metadata) DeleteAttribute(key string) {
 }
 
 // HasAttribute checks if a attribute key exists.
-func (m *Metadata) HasAttribute(key string) bool {
+func (m Metadata) HasAttribute(key string) bool {
 	if m.Attributes == nil {
 		return false
 	}

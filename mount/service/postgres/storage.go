@@ -19,14 +19,14 @@ func (s *PostgresObjectStorageService) GetLifecycle() service.Lifecycle {
 }
 
 // CreateObject creates a new file or directory in the storage
-func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	// Check if path exists in B-tree
 	namedKey := service.NamedKey(ns, key, ":")
 	if _, exists := s.driver.keys.Get(namedKey); exists {
-		return nil, data.ErrExist
+		return data.FileStat{}, data.ErrExist
 	}
 
 	// Verify parent directory exists
@@ -35,23 +35,23 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key
 		parentNamedKey := service.NamedKey(ns, parentKey, ":")
 		parentID, exists := s.driver.keys.Get(parentNamedKey)
 		if !exists {
-			return nil, data.ErrNotExist
+			return data.FileStat{}, data.ErrNotExist
 		}
 
 		// Check if parent is actually a directory
 		var parentMode data.FileMode
 		conn, err := s.driver.pool.Acquire(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to acquire connection: %w", err)
+			return data.FileStat{}, fmt.Errorf("failed to acquire connection: %w", err)
 		}
 		defer conn.Release()
 
 		err = conn.QueryRow(ctx, "SELECT mode FROM vfs_metadata WHERE id = $1", parentID).Scan(&parentMode)
 		if err != nil {
-			return nil, data.ErrNotExist
+			return data.FileStat{}, data.ErrNotExist
 		}
 		if !parentMode.IsDir() {
-			return nil, data.ErrNotDirectory
+			return data.FileStat{}, data.ErrNotDirectory
 		}
 	}
 
@@ -62,7 +62,7 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key
 	// Acquire connection
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to acquire connection: %w", err)
+		return data.FileStat{}, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
@@ -73,13 +73,13 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key
 	`, meta.ID, ns, key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert metadata: %w", err)
+		return data.FileStat{}, fmt.Errorf("failed to insert metadata: %w", err)
 	}
 
 	// Update B-tree index
 	s.driver.keys.Set(namedKey, meta.ID)
 
-	return &data.FileStat{
+	return data.FileStat{
 		Key:        key,
 		Mode:       mode,
 		Size:       0,
@@ -407,7 +407,7 @@ func (s *PostgresObjectStorageService) deleteObjectInternal(ctx context.Context,
 }
 
 // ListObjects lists direct children of a directory or returns info for a file
-func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
+func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -445,7 +445,7 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 
 		// For files, return single entry
 		if !mode.IsDir() {
-			stat := &data.FileStat{
+			stat := data.FileStat{
 				Key:        key,
 				Mode:       mode,
 				Size:       size,
@@ -455,7 +455,7 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 			if contentType != nil {
 				stat.ContentType = data.ContentType(*contentType)
 			}
-			return []*data.FileStat{stat}, nil
+			return []data.FileStat{stat}, nil
 		}
 	}
 
@@ -514,7 +514,7 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 	})
 
 	// Query metadata for all direct children
-	result := make([]*data.FileStat, 0, len(directChildren))
+	result := make([]data.FileStat, 0, len(directChildren))
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
@@ -537,7 +537,7 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 			if contentType != nil {
 				stat.ContentType = data.ContentType(*contentType)
 			}
-			result = append(result, &stat)
+			result = append(result, stat)
 		}
 	}
 
@@ -545,7 +545,7 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 }
 
 // HeadObject returns metadata for an object without reading its content
-func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
+func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -553,12 +553,12 @@ func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, ns, key s
 	namedKey := service.NamedKey(ns, key, ":")
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
-		return nil, data.ErrNotExist
+		return data.FileStat{}, data.ErrNotExist
 	}
 
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to acquire connection: %w", err)
+		return data.FileStat{}, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
@@ -573,10 +573,10 @@ func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, ns, key s
 	`, id).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
 
 	if err == pgx.ErrNoRows {
-		return nil, data.ErrNotExist
+		return data.FileStat{}, data.ErrNotExist
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to query metadata: %w", err)
+		return data.FileStat{}, fmt.Errorf("failed to query metadata: %w", err)
 	}
 
 	// Convert timestamps
@@ -588,7 +588,7 @@ func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, ns, key s
 		stat.ContentType = data.ContentType(*contentType)
 	}
 
-	return &stat, nil
+	return stat, nil
 }
 
 // TruncateObject resizes an object to the specified size

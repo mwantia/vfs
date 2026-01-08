@@ -82,15 +82,15 @@ func (vfs *virtualFileSystemImpl) WriteFile(ctx context.Context, path string, of
 
 // Stat returns file information for the given path.
 // Returns an error if the path doesn't exist.
-func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string) (*data.Metadata, error) {
+func (vfs *virtualFileSystemImpl) StatMetadata(ctx context.Context, path string) (data.Metadata, error) {
 	ctx, err := validateContext(ctx)
 	if err != nil {
-		return nil, err
+		return data.Metadata{}, err
 	}
 
 	root, err := vfs.checkRootMount()
 	if err != nil {
-		return nil, errors.ErrInvalidRootOperation
+		return data.Metadata{}, errors.ErrInvalidRootOperation
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
@@ -118,7 +118,7 @@ func (vfs *virtualFileSystemImpl) LookupMetadata(ctx context.Context, path strin
 
 // ReadDirectory returns a list of entries in the directory at path.
 // Returns an error if the path is not a directory or doesn't exist.
-func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string) ([]*data.Metadata, error) {
+func (vfs *virtualFileSystemImpl) ReadDirectory(ctx context.Context, path string) ([]data.Metadata, error) {
 	ctx, err := validateContext(ctx)
 	if err != nil {
 		return nil, err

@@ -18,7 +18,7 @@ func (s *PostgresMetadataService) GetLifecycle() service.Lifecycle {
 }
 
 // CreateMeta creates new metadata for an object
-func (s *PostgresMetadataService) CreateMeta(ctx context.Context, ns string, meta *data.Metadata) error {
+func (s *PostgresMetadataService) CreateMeta(ctx context.Context, ns string, meta data.Metadata) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -76,7 +76,7 @@ func (s *PostgresMetadataService) CreateMeta(ctx context.Context, ns string, met
 }
 
 // ReadMeta reads metadata for an object
-func (s *PostgresMetadataService) ReadMeta(ctx context.Context, ns, key string) (*data.Metadata, error) {
+func (s *PostgresMetadataService) ReadMeta(ctx context.Context, ns, key string) (data.Metadata, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -84,12 +84,12 @@ func (s *PostgresMetadataService) ReadMeta(ctx context.Context, ns, key string) 
 	namedKey := service.NamedKey(ns, key, ":")
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
-		return nil, data.ErrNotExist
+		return data.Metadata{}, data.ErrNotExist
 	}
 
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to acquire connection: %w", err)
+		return data.Metadata{}, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
@@ -108,10 +108,10 @@ func (s *PostgresMetadataService) ReadMeta(ctx context.Context, ns, key string) 
 		&contentType, &etag, &attributesJSON)
 
 	if err == pgx.ErrNoRows {
-		return nil, data.ErrNotExist
+		return data.Metadata{}, data.ErrNotExist
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to query metadata: %w", err)
+		return data.Metadata{}, fmt.Errorf("failed to query metadata: %w", err)
 	}
 
 	// Convert timestamps
@@ -145,11 +145,11 @@ func (s *PostgresMetadataService) ReadMeta(ctx context.Context, ns, key string) 
 	// Update access time (in memory only for performance)
 	meta.AccessTime = time.Now()
 
-	return &meta, nil
+	return meta, nil
 }
 
 // UpdateMeta updates metadata for an object
-func (s *PostgresMetadataService) UpdateMeta(ctx context.Context, ns, key string, update *data.MetadataUpdate) error {
+func (s *PostgresMetadataService) UpdateMeta(ctx context.Context, ns, key string, update data.MetadataUpdate) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -168,7 +168,7 @@ func (s *PostgresMetadataService) UpdateMeta(ctx context.Context, ns, key string
 
 	// Apply update
 	meta.ModifyTime = time.Now()
-	if _, err := update.Apply(meta); err != nil {
+	if _, err := update.Apply(&meta); err != nil {
 		return fmt.Errorf("failed to apply update: %w", err)
 	}
 
@@ -274,7 +274,7 @@ func (s *PostgresMetadataService) DeleteMeta(ctx context.Context, ns, key string
 }
 
 // QueryMeta queries metadata with filters, sorting, and pagination
-func (s *PostgresMetadataService) QueryMeta(ctx context.Context, ns string, query *service.Query) (*service.QueryPagination, error) {
+func (s *PostgresMetadataService) QueryMeta(ctx context.Context, ns string, query service.Query) (*service.QueryPagination, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -368,7 +368,7 @@ func (s *PostgresMetadataService) QueryMeta(ctx context.Context, ns string, quer
 	defer rows.Close()
 
 	// Process results
-	results := make([]*data.Metadata, 0)
+	results := make([]data.Metadata, 0)
 	for rows.Next() {
 		var meta data.Metadata
 		var uid, gid *int64
@@ -411,7 +411,7 @@ func (s *PostgresMetadataService) QueryMeta(ctx context.Context, ns string, quer
 			meta.Attributes = make(map[string]string)
 		}
 
-		results = append(results, &meta)
+		results = append(results, meta)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -427,10 +427,10 @@ func (s *PostgresMetadataService) QueryMeta(ctx context.Context, ns string, quer
 }
 
 // readMetaInternal reads metadata by ID without locking (caller must hold lock)
-func (s *PostgresMetadataService) readMetaInternal(ctx context.Context, id string) (*data.Metadata, error) {
+func (s *PostgresMetadataService) readMetaInternal(ctx context.Context, id string) (data.Metadata, error) {
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to acquire connection: %w", err)
+		return data.Metadata{}, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
@@ -448,10 +448,10 @@ func (s *PostgresMetadataService) readMetaInternal(ctx context.Context, id strin
 		&contentType, &etag, &attributesJSON)
 
 	if err == pgx.ErrNoRows {
-		return nil, data.ErrNotExist
+		return data.Metadata{}, data.ErrNotExist
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to query metadata: %w", err)
+		return data.Metadata{}, fmt.Errorf("failed to query metadata: %w", err)
 	}
 
 	// Convert timestamps
@@ -482,7 +482,7 @@ func (s *PostgresMetadataService) readMetaInternal(ctx context.Context, id strin
 		meta.Attributes = make(map[string]string)
 	}
 
-	return &meta, nil
+	return meta, nil
 }
 
 // Helper functions for nullable fields

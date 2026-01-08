@@ -90,9 +90,9 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 
 		// Sync truncation to MetadataService if available
 		if m.Metadata != nil {
-			update := &data.MetadataUpdate{
+			update := data.MetadataUpdate{
 				Mask: data.MetadataUpdateSize,
-				Metadata: &data.Metadata{
+				Metadata: data.Metadata{
 					Size: 0,
 				},
 			}
@@ -224,9 +224,9 @@ func (m *Mount) WriteFile(ctx context.Context, path string, offset int64, buffer
 			// TODO :: Missing internal log for tracking internal errors
 			fmt.Printf("WARNING: Failed to get file stat after write for metadata sync: %v\n", statErr)
 		} else {
-			update := &data.MetadataUpdate{
+			update := data.MetadataUpdate{
 				Mask: data.MetadataUpdateSize,
-				Metadata: &data.Metadata{
+				Metadata: data.Metadata{
 					Size: stat.Size,
 				},
 			}
@@ -246,7 +246,7 @@ func (m *Mount) WriteFile(ctx context.Context, path string, offset int64, buffer
 
 // StatMetadata returns file information for the given path.
 // Returns an error if the path doesn't exist.
-func (m *Mount) StatMetadata(ctx context.Context, path string) (*data.Metadata, error) {
+func (m *Mount) StatMetadata(ctx context.Context, path string) (data.Metadata, error) {
 	// Check if this mount has metadata defined
 	if m.Metadata != nil {
 		// Only check if cascading OR owner of the matched path
@@ -265,7 +265,7 @@ func (m *Mount) StatMetadata(ctx context.Context, path string) (*data.Metadata, 
 			}
 			// Other error, propagate and return
 			if err != data.ErrNotExist {
-				return nil, err
+				return data.Metadata{}, err
 			}
 			// We continue to check child mounts or object-storage
 		}
@@ -275,7 +275,7 @@ func (m *Mount) StatMetadata(ctx context.Context, path string) (*data.Metadata, 
 		// Delegate to child mount but don't return immediately
 		meta, err := mount.StatMetadata(ctx, relativePath)
 		if err != nil {
-			return nil, err
+			return data.Metadata{}, err
 		}
 		// writing back data  from a child mount into the root
 		if m.Metadata != nil {
@@ -283,14 +283,10 @@ func (m *Mount) StatMetadata(ctx context.Context, path string) (*data.Metadata, 
 			if m.Options.Cascading {
 				m.mu.Lock()
 				defer m.mu.Unlock()
-				// Clone metadata and adjust path prefix
+				// Copy metadata and adjust path prefix
 				prefix := strings.TrimSuffix(strings.TrimSuffix(path, relativePath), "/")
-				syncMeta := meta.Clone(&data.MetadataUpdate{
-					Mask: data.MetadataUpdateKey,
-					Metadata: &data.Metadata{
-						Key: prefix + "/" + meta.Key,
-					},
-				})
+				syncMeta := meta
+				syncMeta.Key = prefix + "/" + meta.Key
 				if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, syncMeta); syncErr != nil && syncErr != data.ErrExist {
 					// TODO :: Missing internal log for tracking internal errors
 					fmt.Printf("WARNING: Failed to cascade metadata for '%s': %v\n", path, syncErr)
@@ -310,14 +306,14 @@ func (m *Mount) StatMetadata(ctx context.Context, path string) (*data.Metadata, 
 	// Check if ObjectStorage supports read before calling it
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationRead) {
-		return nil, errors.ErrOperationNotSupported
+		return data.Metadata{}, errors.ErrOperationNotSupported
 	}
 	// Get stat from ObjectStorage
 	stat, err := m.ObjectStorage.HeadObject(ctx, m.Options.Namespace, path)
 	m.mu.RUnlock()
 
 	if err != nil {
-		return nil, err
+		return data.Metadata{}, err
 	}
 	// Convert into metadata
 	meta := stat.ToMetadata()
@@ -382,12 +378,12 @@ func (m *Mount) LookupMetadata(ctx context.Context, path string, quick bool) (bo
 		return false, err
 	}
 
-	return stat != nil, nil
+	return stat.Key != "", nil
 }
 
 // ReadDirectory returns a list of entries in the directory at path.
 // Returns an error if the path is not a directory or doesn't exist.
-func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]*data.Metadata, error) {
+func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]data.Metadata, error) {
 	// Check if this mount has metadata defined
 	if m.Metadata != nil {
 		// Only check if cascading OR owner of the matched path
@@ -400,7 +396,7 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]*data.Metadat
 				prefix += "/"
 			}
 
-			query := &service.Query{
+			query := service.Query{
 				Prefix:    prefix,
 				Delimiter: "/", // Only direct children
 			}
@@ -431,7 +427,7 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]*data.Metadat
 		prefix := strings.TrimSuffix(strings.TrimSuffix(path, relativePath), "/")
 
 		// Adjust paths: prepend mount point to make paths absolute from root
-		clonedMetas := data.BatchMetadata(metas, func(m *data.Metadata, i int) *data.Metadata {
+		clonedMetas := data.BatchMetadata(metas, func(m data.Metadata, i int) data.Metadata {
 			m.Key = prefix + "/" + m.Key
 			return m
 		})
@@ -468,7 +464,7 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]*data.Metadat
 		return nil, err
 	}
 	// Convert into metadata
-	metas := make([]*data.Metadata, len(stats))
+	metas := make([]data.Metadata, len(stats))
 	for i, stat := range stats {
 		metas[i] = stat.ToMetadata()
 	}
@@ -495,13 +491,13 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]*data.Metadat
 
 // CreateDirectory creates a new directory at the specified path.
 // Returns an error if the directory already exists or cannot be created.
-func (m *Mount) CreateDirectory(ctx context.Context, path string) (*data.Metadata, error) {
+func (m *Mount) CreateDirectory(ctx context.Context, path string) (data.Metadata, error) {
 	// Check if child mount exists for this path
 	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
 		// Delegate to child mount but don't return immediately
 		meta, err := mount.CreateDirectory(ctx, path)
 		if err != nil {
-			return nil, err
+			return data.Metadata{}, err
 		}
 		// writing back data  from a child mount into the root
 		if m.Metadata != nil {
@@ -509,14 +505,10 @@ func (m *Mount) CreateDirectory(ctx context.Context, path string) (*data.Metadat
 			if m.Options.Cascading {
 				m.mu.Lock()
 				defer m.mu.Unlock()
-				// Clone metadata and adjust path prefix
+				// Copy metadata and adjust path prefix
 				prefix := strings.TrimSuffix(strings.TrimSuffix(path, relativePath), "/")
-				syncMeta := meta.Clone(&data.MetadataUpdate{
-					Mask: data.MetadataUpdateKey,
-					Metadata: &data.Metadata{
-						Key: prefix + "/" + meta.Key,
-					},
-				})
+				syncMeta := meta
+				syncMeta.Key = prefix + "/" + meta.Key
 				if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, syncMeta); syncErr != nil && syncErr != data.ErrExist {
 					// TODO :: Missing internal log for tracking internal errors
 					fmt.Printf("WARNING: Failed to cascade metadata for '%s': %v\n", path, syncErr)
@@ -533,7 +525,7 @@ func (m *Mount) CreateDirectory(ctx context.Context, path string) (*data.Metadat
 	}
 	// Throw if mountpoint is marked as readonly
 	if m.Options.IsReadOnly {
-		return nil, errors.ErrMountIsReadonly
+		return data.Metadata{}, errors.ErrMountIsReadonly
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
@@ -541,21 +533,21 @@ func (m *Mount) CreateDirectory(ctx context.Context, path string) (*data.Metadat
 
 	// Check path to validate against constraints
 	if err := m.validatePathLength(path); err != nil {
-		return nil, fmt.Errorf("failed to validate path: %v", err)
+		return data.Metadata{}, fmt.Errorf("failed to validate path: %v", err)
 	}
 	if err := m.validatePathDepth(path); err != nil {
-		return nil, fmt.Errorf("failed to validate path: %v", err)
+		return data.Metadata{}, fmt.Errorf("failed to validate path: %v", err)
 	}
 	// Check supported service operations
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()
 	if !caps.SupportsOperation(service.ObjectStorageOperationCreate) {
-		return nil, errors.ErrOperationNotSupported
+		return data.Metadata{}, errors.ErrOperationNotSupported
 	}
 
 	// Create directory in ObjectStorage (use directory mode 0755 | ModeDir)
 	stat, err := m.ObjectStorage.CreateObject(ctx, m.Options.Namespace, path, data.FileMode(0755)|data.ModeDir)
 	if err != nil {
-		return nil, err
+		return data.Metadata{}, err
 	}
 	// Sync to MetadataService if available
 	meta := stat.ToMetadata()
@@ -567,7 +559,7 @@ func (m *Mount) CreateDirectory(ctx context.Context, path string) (*data.Metadat
 	}
 
 	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeCreated, path, true, 0); ok && err != nil {
-		return nil, err
+		return data.Metadata{}, err
 	}
 
 	return meta, nil

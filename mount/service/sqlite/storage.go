@@ -15,13 +15,13 @@ func (s *SqliteObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 	// Check if key already exists in B-tree
 	namedKey := service.NamedKey(ns, key, ":")
 	if _, exists := s.driver.keys.Get(namedKey); exists {
-		return nil, data.ErrExist
+		return data.FileStat{}, data.ErrExist
 	}
 
 	// Verify parent directory exists (unless this is root)
@@ -30,17 +30,17 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key s
 		parentNamedKey := service.NamedKey(ns, parentKey, ":")
 		parentID, exists := s.driver.keys.Get(parentNamedKey)
 		if !exists {
-			return nil, data.ErrNotExist
+			return data.FileStat{}, data.ErrNotExist
 		}
 
 		// Check if parent is actually a directory
 		var parentMode data.FileMode
 		err := s.driver.db.QueryRowContext(ctx, "SELECT mode FROM vfs_metadata WHERE id = ?", parentID).Scan(&parentMode)
 		if err != nil {
-			return nil, data.ErrNotExist
+			return data.FileStat{}, data.ErrNotExist
 		}
 		if !parentMode.IsDir() {
-			return nil, data.ErrNotDirectory
+			return data.FileStat{}, data.ErrNotDirectory
 		}
 	}
 
@@ -55,7 +55,7 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	`, meta.ID, ns, key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
 
 	if err != nil {
-		return nil, err
+		return data.FileStat{}, err
 	}
 
 	// Initialize empty data row with ref_count = 1
@@ -65,14 +65,14 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	`, meta.ID, []byte{}, 0, 1, now.Unix(), now.Unix())
 
 	if err != nil {
-		return nil, err
+		return data.FileStat{}, err
 	}
 
 	// Update B-tree index
 	s.driver.keys.Set(namedKey, meta.ID)
 
 	// Convert to FileStat
-	return &data.FileStat{
+	return data.FileStat{
 		Key:         key,
 		Mode:        mode,
 		Size:        0,
@@ -347,7 +347,7 @@ func (s *SqliteObjectStorageService) deleteObjectInternal(ctx context.Context, n
 	return nil
 }
 
-func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
+func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -379,7 +379,7 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key st
 
 		// For files, return single entry
 		if !mode.IsDir() {
-			stat := &data.FileStat{
+			stat := data.FileStat{
 				Key:        key,
 				Mode:       mode,
 				Size:       size,
@@ -389,7 +389,7 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key st
 			if contentType.Valid {
 				stat.ContentType = data.ContentType(contentType.String)
 			}
-			return []*data.FileStat{stat}, nil
+			return []data.FileStat{stat}, nil
 		}
 	}
 
@@ -444,7 +444,7 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key st
 	})
 
 	// Query metadata for all direct children
-	result := make([]*data.FileStat, 0, len(directChildren))
+	result := make([]data.FileStat, 0, len(directChildren))
 	for _, childID := range directChildren {
 		var stat data.FileStat
 		var contentType sql.NullString
@@ -461,21 +461,21 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key st
 			if contentType.Valid {
 				stat.ContentType = data.ContentType(contentType.String)
 			}
-			result = append(result, &stat)
+			result = append(result, stat)
 		}
 	}
 
 	return result, nil
 }
 
-func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
+func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 	// Check B-tree for key existence
 	namedKey := service.NamedKey(ns, key, ":")
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
-		return nil, data.ErrNotExist
+		return data.FileStat{}, data.ErrNotExist
 	}
 
 	// Query metadata from database
@@ -489,10 +489,10 @@ func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, ns, key str
 	`, id).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
 
 	if err == sql.ErrNoRows {
-		return nil, data.ErrNotExist
+		return data.FileStat{}, data.ErrNotExist
 	}
 	if err != nil {
-		return nil, err
+		return data.FileStat{}, err
 	}
 
 	// Convert timestamps
@@ -504,7 +504,7 @@ func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, ns, key str
 		stat.ContentType = data.ContentType(contentType.String)
 	}
 
-	return &stat, nil
+	return stat, nil
 }
 
 func (s *SqliteObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {

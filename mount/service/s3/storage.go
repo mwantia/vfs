@@ -15,7 +15,7 @@ func (s *S3ObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *S3ObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *S3ObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -26,7 +26,7 @@ func (s *S3ObjectStorageService) CreateObject(ctx context.Context, ns, key strin
 	// Check if object already exists
 	_, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
 	if err == nil {
-		return nil, data.ErrExist
+		return data.FileStat{}, data.ErrExist
 	}
 
 	// For directories: create explicit marker with trailing "/"
@@ -39,10 +39,10 @@ func (s *S3ObjectStorageService) CreateObject(ctx context.Context, ns, key strin
 
 		_, err = s.driver.client.PutObject(ctx, bucket, dirKey, strings.NewReader(""), 0, minio.PutObjectOptions{})
 		if err != nil {
-			return nil, err
+			return data.FileStat{}, err
 		}
 
-		return &data.FileStat{
+		return data.FileStat{
 			Key:        key,
 			Mode:       mode,
 			Size:       0,
@@ -66,10 +66,10 @@ func (s *S3ObjectStorageService) CreateObject(ctx context.Context, ns, key strin
 		opts,
 	)
 	if err != nil {
-		return nil, err
+		return data.FileStat{}, err
 	}
 
-	return &data.FileStat{
+	return data.FileStat{
 		Key:         key,
 		Mode:        mode,
 		Size:        0,
@@ -292,7 +292,7 @@ func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, ns, key strin
 	return s.driver.client.RemoveObject(ctx, bucket, named, minio.RemoveObjectOptions{})
 }
 
-func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
+func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -311,7 +311,7 @@ func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string
 		Recursive: false, // Direct children only
 	})
 
-	var stats []*data.FileStat
+	var stats []data.FileStat
 	seen := make(map[string]bool) // Deduplicate
 
 	for object := range objects {
@@ -344,7 +344,7 @@ func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string
 			mode = data.ModeDir | 0755
 		}
 
-		stats = append(stats, &data.FileStat{
+		stats = append(stats, data.FileStat{
 			Key:         absoluteKey,
 			Size:        object.Size,
 			Mode:        mode,
@@ -375,7 +375,7 @@ func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string
 	return stats, nil
 }
 
-func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
+func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -400,7 +400,7 @@ func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string)
 		objInfo, err = s.driver.client.StatObject(ctx, bucket, dirKey, minio.StatObjectOptions{})
 		if err == nil {
 			// Found explicit directory marker
-			return &data.FileStat{
+			return data.FileStat{
 				Key:        key,
 				Mode:       data.ModeDir | 0755,
 				Size:       0,
@@ -419,7 +419,7 @@ func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string)
 		for range objects {
 			// Has children - it's an implicit directory
 			now := time.Now()
-			return &data.FileStat{
+			return data.FileStat{
 				Key:        key,
 				Mode:       data.ModeDir | 0755,
 				Size:       0,
@@ -428,10 +428,10 @@ func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string)
 			}, nil
 		}
 
-		return nil, data.ErrNotExist
+		return data.FileStat{}, data.ErrNotExist
 	}
 
-	return nil, err
+	return data.FileStat{}, err
 }
 
 func (s *S3ObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
@@ -515,7 +515,7 @@ func (s *S3ObjectStorageService) buildNamedKey(ns, key string) string {
 
 // objectInfoToFileStat converts S3 ObjectInfo to FileStat
 // Constructs FileStat from S3's native metadata: Size, LastModified, ETag, ContentType
-func objectInfoToFileStat(key string, objInfo minio.ObjectInfo) *data.FileStat {
+func objectInfoToFileStat(key string, objInfo minio.ObjectInfo) data.FileStat {
 	// Determine file mode (default to regular file)
 	mode := data.FileMode(0644)
 
@@ -524,7 +524,7 @@ func objectInfoToFileStat(key string, objInfo minio.ObjectInfo) *data.FileStat {
 		mode = data.ModeDir | 0755
 	}
 
-	return &data.FileStat{
+	return data.FileStat{
 		Key:         key,
 		Size:        objInfo.Size,
 		Mode:        mode,

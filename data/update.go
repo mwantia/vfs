@@ -25,11 +25,11 @@ const (
 // MetadataUpdate represents a partial update to an inode.
 type MetadataUpdate struct {
 	Mask     MetadataUpdateMask `json:"mask"`
-	Metadata *Metadata          `json:"metadata"`
+	Metadata Metadata           `json:"metadata"`
 }
 
 // Apply applies this update to an existing virtual file metadata.
-func (mu *MetadataUpdate) Apply(target *Metadata) (bool, error) {
+func (mu MetadataUpdate) Apply(target *Metadata) (bool, error) {
 	// Use a dedicated value to check if any
 	// modification to the target has been done
 	modified := false

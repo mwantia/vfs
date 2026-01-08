@@ -16,7 +16,7 @@ func (s *ConsulObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -24,10 +24,10 @@ func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	// Check if object already exists
 	pair, _, err := s.driver.kv.Get(named, nil)
 	if err != nil {
-		return nil, err
+		return data.FileStat{}, err
 	}
 	if pair != nil {
-		return nil, data.ErrExist
+		return data.FileStat{}, data.ErrExist
 	}
 
 	// Verify parent directory exists (except for root)
@@ -40,7 +40,7 @@ func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key s
 			parent, _, err := s.driver.kv.Get(parentConsulKey, nil)
 			if err == nil && parent != nil {
 				// Parent exists as a key (file), can't create child
-				return nil, data.ErrNotDirectory
+				return data.FileStat{}, data.ErrNotDirectory
 			}
 
 			// Parent doesn't exist as a key - check if it's a virtual directory
@@ -50,11 +50,11 @@ func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key s
 			}
 			keys, _, err := s.driver.kv.Keys(prefix, "", nil)
 			if err != nil {
-				return nil, err
+				return data.FileStat{}, err
 			}
 			if len(keys) == 0 {
 				// No children, so parent doesn't exist
-				return nil, data.ErrNotExist
+				return data.FileStat{}, data.ErrNotExist
 			}
 			// Parent is a virtual directory - allow creation
 		}
@@ -74,7 +74,7 @@ func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key s
 		}
 
 		if _, err := s.driver.kv.Put(pair, nil); err != nil {
-			return nil, err
+			return data.FileStat{}, err
 		}
 	} else {
 		// Create file
@@ -85,11 +85,11 @@ func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key s
 		}
 
 		if _, err := s.driver.kv.Put(pair, nil); err != nil {
-			return nil, err
+			return data.FileStat{}, err
 		}
 	}
 
-	return &data.FileStat{
+	return data.FileStat{
 		Key:        key,
 		Mode:       mode,
 		Size:       0,
@@ -242,7 +242,7 @@ func (s *ConsulObjectStorageService) DeleteObject(ctx context.Context, ns, key s
 	return nil
 }
 
-func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
+func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -258,7 +258,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 				mode = 0644
 			}
 
-			return []*data.FileStat{{
+			return []data.FileStat{{
 				Key:        key,
 				Mode:       mode,
 				Size:       int64(len(pair.Value)),
@@ -301,7 +301,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 	}
 
 	// Build result list
-	result := make([]*data.FileStat, 0, len(childrens))
+	result := make([]data.FileStat, 0, len(childrens))
 
 	for _, child := range childrens {
 		// Skip the directory's own key (exact match of the prefix)
@@ -344,7 +344,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 			pair, _, err := s.driver.kv.Get(child, nil)
 			if err != nil || pair == nil {
 				// Virtual directory - no explicit key
-				result = append(result, &data.FileStat{
+				result = append(result, data.FileStat{
 					Key:        absoluteKey,
 					Mode:       0755 | data.ModeDir,
 					Size:       0,
@@ -358,7 +358,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 					mode = 0755 | data.ModeDir
 				}
 
-				result = append(result, &data.FileStat{
+				result = append(result, data.FileStat{
 					Key:        absoluteKey,
 					Mode:       mode,
 					Size:       0,
@@ -378,7 +378,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 				mode = 0644
 			}
 
-			result = append(result, &data.FileStat{
+			result = append(result, data.FileStat{
 				Key:        absoluteKey,
 				Mode:       mode,
 				Size:       int64(len(pair.Value)),
@@ -391,7 +391,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 	return result, nil
 }
 
-func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
+func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -405,7 +405,7 @@ func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key str
 			mode = 0644 // Default file mode
 		}
 
-		return &data.FileStat{
+		return data.FileStat{
 			Key:        key,
 			Mode:       mode,
 			Size:       int64(len(pair.Value)),
@@ -423,7 +423,7 @@ func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key str
 			mode = 0755 | data.ModeDir // Default directory mode
 		}
 
-		return &data.FileStat{
+		return data.FileStat{
 			Key:        key,
 			Mode:       mode,
 			Size:       0,
@@ -435,12 +435,12 @@ func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key str
 	// Check if it's a virtual directory (has children)
 	keys, _, err := s.driver.kv.Keys(dirKey, "", nil)
 	if err != nil {
-		return nil, err
+		return data.FileStat{}, err
 	}
 
 	if len(keys) > 0 {
 		// It's a virtual directory (has children but no explicit key)
-		return &data.FileStat{
+		return data.FileStat{
 			Key:        key,
 			Mode:       0755 | data.ModeDir,
 			Size:       0,
@@ -450,7 +450,7 @@ func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key str
 	}
 
 	// Doesn't exist at all
-	return nil, data.ErrNotExist
+	return data.FileStat{}, data.ErrNotExist
 }
 
 func (s *ConsulObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {

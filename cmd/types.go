@@ -69,11 +69,11 @@ type API interface {
 	UnlinkFile(ctx context.Context, path string) error
 
 	// Metadata Operations
-	StatMetadata(ctx context.Context, path string) (*data.Metadata, error)
+	StatMetadata(ctx context.Context, path string) (data.Metadata, error)
 	LookupMetadata(ctx context.Context, path string) (bool, error)
 
 	// Directory Operations
-	ReadDirectory(ctx context.Context, path string) ([]*data.Metadata, error)
+	ReadDirectory(ctx context.Context, path string) ([]data.Metadata, error)
 	CreateDirectory(ctx context.Context, path string) error
 	RemoveDirectory(ctx context.Context, path string, force bool) error
 

@@ -18,7 +18,7 @@ func (s *DirectObjectStorageService) GetLifecycle() service.Lifecycle {
 }
 
 // CreateObject creates a new file or directory in the filesystem
-func (s *DirectObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (*data.FileStat, error) {
+func (s *DirectObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -26,18 +26,18 @@ func (s *DirectObjectStorageService) CreateObject(ctx context.Context, ns, key s
 
 	// Check if exists
 	if _, err := os.Stat(fullPath); err == nil {
-		return nil, data.ErrExist
+		return data.FileStat{}, data.ErrExist
 	}
 
 	// Create directory or file
 	if mode.IsDir() {
 		if err := os.Mkdir(fullPath, 0755); err != nil {
-			return nil, err
+			return data.FileStat{}, err
 		}
 	} else {
 		file, err := os.Create(fullPath)
 		if err != nil {
-			return nil, err
+			return data.FileStat{}, err
 		}
 		defer file.Close()
 	}
@@ -45,7 +45,7 @@ func (s *DirectObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	// Stat the created object to get accurate metadata
 	info, err := os.Stat(fullPath)
 	if err != nil {
-		return nil, err
+		return data.FileStat{}, err
 	}
 
 	return s.driver.toFileStat(key, info), nil
@@ -139,7 +139,7 @@ func (s *DirectObjectStorageService) DeleteObject(ctx context.Context, ns, key s
 }
 
 // ListObjects lists directory contents or returns info for a single file
-func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]*data.FileStat, error) {
+func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -158,7 +158,7 @@ func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key st
 
 	// For files, return single entry
 	if !info.IsDir() {
-		return []*data.FileStat{s.driver.toFileStat(key, info)}, nil
+		return []data.FileStat{s.driver.toFileStat(key, info)}, nil
 	}
 
 	// For directories, list direct children
@@ -167,7 +167,7 @@ func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key st
 		return nil, err
 	}
 
-	stats := make([]*data.FileStat, 0, len(entries))
+	stats := make([]data.FileStat, 0, len(entries))
 	for _, entry := range entries {
 		childInfo, err := entry.Info()
 		if err != nil {
@@ -188,7 +188,7 @@ func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key st
 }
 
 // HeadObject returns metadata for a file or directory
-func (s *DirectObjectStorageService) HeadObject(ctx context.Context, ns, key string) (*data.FileStat, error) {
+func (s *DirectObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -197,12 +197,13 @@ func (s *DirectObjectStorageService) HeadObject(ctx context.Context, ns, key str
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, data.ErrNotExist
+			return data.FileStat{}, data.ErrNotExist
 		}
 		if errors.Is(err, fs.ErrPermission) {
-			return nil, data.ErrPermission
+			return data.FileStat{}, data.ErrPermission
 		}
-		return nil, err
+
+		return data.FileStat{}, err
 	}
 
 	return s.driver.toFileStat(key, info), nil
@@ -224,14 +225,14 @@ func (d *DirectDriver) resolvePath(key string) string {
 }
 
 // toFileStat converts os.FileInfo to data.FileStat
-func (d *DirectDriver) toFileStat(key string, info os.FileInfo) *data.FileStat {
+func (d *DirectDriver) toFileStat(key string, info os.FileInfo) data.FileStat {
 	// Convert os.FileMode to data.FileMode
 	virtMode := data.FileMode(info.Mode().Perm())
 	if info.IsDir() {
 		virtMode |= data.ModeDir
 	}
 
-	return &data.FileStat{
+	return data.FileStat{
 		Key:         key,
 		Size:        info.Size(),
 		Mode:        virtMode,

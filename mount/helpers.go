@@ -126,11 +126,11 @@ func (m *Mount) matchAnyMountPoints(path string) bool {
 
 // createMountMetadata generates synthetic metadata for a mount entry.
 // The metadata is virtual (not persisted) and uses mount creation time.
-func (m *Mount) createMountMetadata(key string) *data.Metadata {
+func (m *Mount) createMountMetadata(key string) data.Metadata {
 	now := m.createTime // Use mount creation time for consistency
 	id := uuid.Must(uuid.NewV7()).String()
 
-	return &data.Metadata{
+	return data.Metadata{
 		ID:          id,
 		Key:         key,
 		Mode:        data.ModeMount | data.ModeDir | 0555, // Mount + Directory + r-xr-xr-x
@@ -149,7 +149,7 @@ func (m *Mount) createMountMetadata(key string) *data.Metadata {
 // Mount entries shadow any real directories with the same name (mount takes precedence).
 //
 // Thread-safety: Caller must hold m.mu (at least RLock).
-func (m *Mount) injectMountEntries(dirPath string, entries []*data.Metadata) []*data.Metadata {
+func (m *Mount) injectMountEntries(dirPath string, entries []data.Metadata) []data.Metadata {
 	// Find direct child mounts for this path
 	childMounts := m.findDirectChildMounts(dirPath)
 
@@ -158,7 +158,7 @@ func (m *Mount) injectMountEntries(dirPath string, entries []*data.Metadata) []*
 	}
 
 	// Create mount metadata entries
-	mountEntries := make(map[string]*data.Metadata, len(childMounts))
+	mountEntries := make(map[string]data.Metadata, len(childMounts))
 	for _, mountName := range childMounts {
 		// Build full key for metadata
 		var fullKey string
@@ -172,7 +172,7 @@ func (m *Mount) injectMountEntries(dirPath string, entries []*data.Metadata) []*
 	}
 
 	// Deduplicate: remove real entries that conflict with mounts (mount shadows)
-	filtered := make([]*data.Metadata, 0, len(entries))
+	filtered := make([]data.Metadata, 0, len(entries))
 	for _, entry := range entries {
 		// Extract base name from entry key
 		baseName := entry.Key
@@ -187,7 +187,7 @@ func (m *Mount) injectMountEntries(dirPath string, entries []*data.Metadata) []*
 	}
 
 	// Combine filtered entries + mount entries
-	result := make([]*data.Metadata, 0, len(filtered)+len(mountEntries))
+	result := make([]data.Metadata, 0, len(filtered)+len(mountEntries))
 	result = append(result, filtered...)
 	for _, mountMeta := range mountEntries {
 		result = append(result, mountMeta)

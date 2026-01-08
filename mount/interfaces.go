@@ -45,7 +45,7 @@ type MountPoint interface {
 
 	// StatMetadata returns file information for the given path.
 	// Returns an error if the path doesn't exist.
-	StatMetadata(ctx context.Context, path string) (*data.Metadata, error)
+	StatMetadata(ctx context.Context, path string) (data.Metadata, error)
 
 	// Lookup checks if a file or directory exists at the given path.
 	// Returns true if the path exists, false otherwise.
@@ -53,11 +53,11 @@ type MountPoint interface {
 
 	// ReadDirectory returns a list of entries in the directory at path.
 	// Returns an error if the path is not a directory or doesn't exist.
-	ReadDirectory(ctx context.Context, path string) ([]*data.Metadata, error)
+	ReadDirectory(ctx context.Context, path string) ([]data.Metadata, error)
 
 	// CreateDirectory creates a new directory at the specified path.
 	// Returns an error if the directory already exists or cannot be created.
-	CreateDirectory(ctx context.Context, path string) (*data.Metadata, error)
+	CreateDirectory(ctx context.Context, path string) (data.Metadata, error)
 
 	// RemoveDirectory removes an empty directory at the specified path.
 	// Returns an error if the directory is not empty or doesn't exist.

@@ -43,7 +43,7 @@ type Query struct {
 
 type QueryPagination struct {
 	// List of all queried metadata candidates
-	Candidates []*data.Metadata
+	Candidates []data.Metadata
 
 	// Total matches before pagination
 	TotalCount int
@@ -68,8 +68,8 @@ const (
 	SortDesc SortOrder = "desc"
 )
 
-func ApplyFilters(metas []*data.Metadata, query *Query) []*data.Metadata {
-	filtered := make([]*data.Metadata, 0)
+func ApplyFilters(metas []data.Metadata, query Query) []data.Metadata {
+	filtered := make([]data.Metadata, 0)
 	for _, meta := range metas {
 		contentType := string(meta.ContentType)
 		// Content type query filter
@@ -96,7 +96,7 @@ func ApplyFilters(metas []*data.Metadata, query *Query) []*data.Metadata {
 	return filtered
 }
 
-func ApplySort(metas []*data.Metadata, by SortField, order SortOrder) {
+func ApplySort(metas []data.Metadata, by SortField, order SortOrder) {
 	if by != "" {
 		sort.Slice(metas, func(i, j int) bool {
 			switch by {

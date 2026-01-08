@@ -30,8 +30,8 @@ type FileStat struct {
 }
 
 // ToMetadata converts FileStat into a FileMetadata
-func (fs *FileStat) ToMetadata() *Metadata {
-	return &Metadata{
+func (fs FileStat) ToMetadata() Metadata {
+	return Metadata{
 		ID:          genMetadataID(),
 		Key:         fs.Key,
 		Mode:        fs.Mode,
@@ -46,11 +46,11 @@ func (fs *FileStat) ToMetadata() *Metadata {
 }
 
 // Marshal provides JSON serialization for Inode.
-func (vs *FileStat) Marshal() ([]byte, error) {
+func (vs FileStat) Marshal() ([]byte, error) {
 	return json.Marshal(vs)
 }
 
 // Unmarshal provides JSON deserialization for Inode.
-func (vs *FileStat) Unmarshal(data []byte) error {
+func (vs FileStat) Unmarshal(data []byte) error {
 	return json.Unmarshal(data, &vs)
 }

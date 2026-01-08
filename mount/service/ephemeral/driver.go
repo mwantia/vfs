@@ -16,10 +16,10 @@ func NewEphemeralMonolithDriver(uri *service.Uri) *EphemeralMonolithDriver {
 	return &EphemeralMonolithDriver{
 		keys:     btree.NewMap[string, string](0),
 		dirs:     make(map[string][]string),
-		metadata: make(map[string]*data.Metadata),
+		metadata: make(map[string]data.Metadata),
 		refCount: make(map[string]int),
 
-		stats: make(map[string]*data.FileStat),
+		stats: make(map[string]data.FileStat),
 		datas: make(map[string][]byte),
 	}
 }

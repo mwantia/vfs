@@ -52,18 +52,18 @@ type Metadata struct {
 }
 
 // Marshal provides JSON serialization for Inode.
-func (m *Metadata) Marshal() ([]byte, error) {
+func (m Metadata) Marshal() ([]byte, error) {
 	return json.Marshal(m)
 }
 
 // Unmarshal provides JSON deserialization for Inode.
-func (m *Metadata) Unmarshal(data []byte) error {
+func (m Metadata) Unmarshal(data []byte) error {
 	return json.Unmarshal(data, &m)
 }
 
 // ToStat converts FileMetadata into a low-level FileStat.
-func (m *Metadata) ToStat() *FileStat {
-	return &FileStat{
+func (m Metadata) ToStat() FileStat {
+	return FileStat{
 		Key:         m.Key,
 		Mode:        m.Mode,
 		Size:        m.Size,
@@ -75,7 +75,7 @@ func (m *Metadata) ToStat() *FileStat {
 }
 
 // GetType returns the filetype defined to this metadata
-func (m *Metadata) GetType() FileType {
+func (m Metadata) GetType() FileType {
 	switch {
 	case m.Mode.IsMount():
 		return FileTypeMount
@@ -92,14 +92,4 @@ func (m *Metadata) GetType() FileType {
 	default:
 		return FileTypeRegular
 	}
-}
-
-// Clone creates a deep copy of the object info.
-func (m *Metadata) Clone(update *MetadataUpdate) *Metadata {
-	clone := *m
-	if update != nil {
-		update.Apply(&clone)
-	}
-
-	return &clone
 }

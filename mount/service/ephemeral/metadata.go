@@ -13,7 +13,7 @@ func (s *EphemeralMetadataService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (ems *EphemeralMetadataService) CreateMeta(ctx context.Context, ns string, meta *data.Metadata) error {
+func (ems *EphemeralMetadataService) CreateMeta(ctx context.Context, ns string, meta data.Metadata) error {
 	ems.driver.mu.Lock()
 	defer ems.driver.mu.Unlock()
 
@@ -53,13 +53,13 @@ func (ems *EphemeralMetadataService) CreateMeta(ctx context.Context, ns string, 
 	return nil
 }
 
-func (ems *EphemeralMetadataService) ReadMeta(ctx context.Context, ns, key string) (*data.Metadata, error) {
+func (ems *EphemeralMetadataService) ReadMeta(ctx context.Context, ns, key string) (data.Metadata, error) {
 	ems.driver.mu.RLock()
 	defer ems.driver.mu.RUnlock()
 
 	meta, exists := ems.getMeta(ns, key)
 	if !exists {
-		return nil, data.ErrNotExist
+		return data.Metadata{}, data.ErrNotExist
 	}
 
 	// Update access time (acceptable race condition for performance)
@@ -68,7 +68,7 @@ func (ems *EphemeralMetadataService) ReadMeta(ctx context.Context, ns, key strin
 	return meta, nil
 }
 
-func (ems *EphemeralMetadataService) UpdateMeta(ctx context.Context, ns, key string, update *data.MetadataUpdate) error {
+func (ems *EphemeralMetadataService) UpdateMeta(ctx context.Context, ns, key string, update data.MetadataUpdate) error {
 	ems.driver.mu.Lock()
 	defer ems.driver.mu.Unlock()
 
@@ -78,7 +78,7 @@ func (ems *EphemeralMetadataService) UpdateMeta(ctx context.Context, ns, key str
 	}
 
 	meta.ModifyTime = time.Now()
-	if _, err := update.Apply(meta); err != nil {
+	if _, err := update.Apply(&meta); err != nil {
 		return err
 	}
 
@@ -138,11 +138,11 @@ func (ems *EphemeralMetadataService) ExistsMeta(ctx context.Context, ns, key str
 	return exists, nil
 }
 
-func (ems *EphemeralMetadataService) QueryMeta(ctx context.Context, ns string, query *service.Query) (*service.QueryPagination, error) {
+func (ems *EphemeralMetadataService) QueryMeta(ctx context.Context, ns string, query service.Query) (*service.QueryPagination, error) {
 	ems.driver.mu.RLock()
 	defer ems.driver.mu.RUnlock()
 
-	var candidates []*data.Metadata
+	var candidates []data.Metadata
 
 	if query.Delimiter == "/" {
 		// Delimiter mode: return only direct children
@@ -228,17 +228,17 @@ func (ems *EphemeralMetadataService) QueryMeta(ctx context.Context, ns string, q
 	}, nil
 }
 
-func (ems *EphemeralMetadataService) getMeta(ns, key string) (*data.Metadata, bool) {
+func (ems *EphemeralMetadataService) getMeta(ns, key string) (data.Metadata, bool) {
 	named := service.NamedKey(ns, key, ":")
 
 	id, exists := ems.driver.keys.Get(named)
 	if !exists {
-		return nil, false
+		return data.Metadata{}, false
 	}
 
 	meta, exists := ems.driver.metadata[id]
 	if !exists {
-		return nil, false
+		return data.Metadata{}, false
 	}
 
 	return meta, true

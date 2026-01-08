@@ -25,7 +25,7 @@ func (s *SqliteMetadataService) ExistsMeta(ctx context.Context, ns, key string) 
 	return exists, nil
 }
 
-func (s *SqliteMetadataService) ReadMeta(ctx context.Context, ns, key string) (*data.Metadata, error) {
+func (s *SqliteMetadataService) ReadMeta(ctx context.Context, ns, key string) (data.Metadata, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -33,7 +33,7 @@ func (s *SqliteMetadataService) ReadMeta(ctx context.Context, ns, key string) (*
 	namedKey := service.NamedKey(ns, key, ":")
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
-		return nil, data.ErrNotExist
+		return data.Metadata{}, data.ErrNotExist
 	}
 
 	// Query full metadata from database
@@ -51,10 +51,10 @@ func (s *SqliteMetadataService) ReadMeta(ctx context.Context, ns, key string) (*
 		&contentType, &etag, &attributesJSON)
 
 	if err == sql.ErrNoRows {
-		return nil, data.ErrNotExist
+		return data.Metadata{}, data.ErrNotExist
 	}
 	if err != nil {
-		return nil, err
+		return data.Metadata{}, err
 	}
 
 	// Convert timestamps
@@ -79,14 +79,14 @@ func (s *SqliteMetadataService) ReadMeta(ctx context.Context, ns, key string) (*
 	// Deserialize attributes from JSON
 	if attributesJSON.Valid && attributesJSON.String != "" {
 		if err := json.Unmarshal([]byte(attributesJSON.String), &meta.Attributes); err != nil {
-			return nil, err
+			return data.Metadata{}, err
 		}
 	}
 
-	return &meta, nil
+	return meta, nil
 }
 
-func (s *SqliteMetadataService) CreateMeta(ctx context.Context, ns string, meta *data.Metadata) error {
+func (s *SqliteMetadataService) CreateMeta(ctx context.Context, ns string, meta data.Metadata) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -145,7 +145,7 @@ func (s *SqliteMetadataService) CreateMeta(ctx context.Context, ns string, meta 
 	return nil
 }
 
-func (s *SqliteMetadataService) UpdateMeta(ctx context.Context, ns, key string, update *data.MetadataUpdate) error {
+func (s *SqliteMetadataService) UpdateMeta(ctx context.Context, ns, key string, update data.MetadataUpdate) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -284,7 +284,7 @@ func (s *SqliteMetadataService) DeleteMeta(ctx context.Context, ns, key string) 
 	return nil
 }
 
-func (s *SqliteMetadataService) QueryMeta(ctx context.Context, ns string, query *service.Query) (*service.QueryPagination, error) {
+func (s *SqliteMetadataService) QueryMeta(ctx context.Context, ns string, query service.Query) (*service.QueryPagination, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -369,7 +369,7 @@ func (s *SqliteMetadataService) QueryMeta(ctx context.Context, ns string, query 
 	defer rows.Close()
 
 	// Process results
-	results := make([]*data.Metadata, 0)
+	results := make([]data.Metadata, 0)
 	for rows.Next() {
 		var meta data.Metadata
 		var uid, gid sql.NullInt64
@@ -411,7 +411,7 @@ func (s *SqliteMetadataService) QueryMeta(ctx context.Context, ns string, query 
 			}
 		}
 
-		results = append(results, &meta)
+		results = append(results, meta)
 	}
 
 	if err := rows.Err(); err != nil {

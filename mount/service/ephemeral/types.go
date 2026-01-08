@@ -20,11 +20,11 @@ type EphemeralMonolithDriver struct {
 	// Metadata
 	keys     *btree.Map[string, string]
 	dirs     map[string][]string
-	metadata map[string]*data.Metadata
+	metadata map[string]data.Metadata
 	refCount map[string]int
 
 	// Object Storage
-	stats map[string]*data.FileStat
+	stats map[string]data.FileStat
 	datas map[string][]byte
 }
 
