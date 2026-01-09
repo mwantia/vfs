@@ -11,30 +11,30 @@ func (s *StubObjectStorageDriver) GetLifecycle() service.Lifecycle {
 	return s
 }
 
-func (*StubObjectStorageDriver) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
+func (*StubObjectStorageDriver) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	return data.FileStat{}, nil
 }
 
-func (*StubObjectStorageDriver) ReadObject(ctx context.Context, ns, key string, offset int64, data []byte) (int, error) {
+func (*StubObjectStorageDriver) ReadObject(ctx context.Context, key string, offset int64, data []byte) (int, error) {
 	return 0, nil
 }
 
-func (*StubObjectStorageDriver) WriteObject(ctx context.Context, ns, key string, offset int64, data []byte) (int, error) {
+func (*StubObjectStorageDriver) WriteObject(ctx context.Context, key string, offset int64, data []byte) (int, error) {
 	return 0, nil
 }
 
-func (*StubObjectStorageDriver) DeleteObject(ctx context.Context, ns, key string, force bool) error {
+func (*StubObjectStorageDriver) DeleteObject(ctx context.Context, key string, force bool) error {
 	return nil
 }
 
-func (*StubObjectStorageDriver) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
+func (*StubObjectStorageDriver) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
 	return nil, nil
 }
 
-func (*StubObjectStorageDriver) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
+func (*StubObjectStorageDriver) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	return data.FileStat{}, nil
 }
 
-func (*StubObjectStorageDriver) TruncateObject(ctx context.Context, ns, key string, size int64) error {
+func (*StubObjectStorageDriver) TruncateObject(ctx context.Context, key string, size int64) error {
 	return nil
 }

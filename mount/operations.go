@@ -30,7 +30,6 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	namespace := m.Options.Namespace
 	key := traversal.RelativePath()
 
 	// Check path constraints
@@ -49,11 +48,14 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 
 	// Check if file exists when not creating
 	if flags&data.AccessModeCreate == 0 {
-		// Check if object exists
-		stat, err := m.ObjectStorage.HeadObject(traversal, namespace, key)
+		// Check if object exists (apply PathPrefix for ObjectStorage)
+		prefixedKey := m.addObjectStoragePathPrefix(key)
+		stat, err := m.ObjectStorage.HeadObject(traversal, prefixedKey)
 		if err != nil {
 			return nil, err
 		}
+		// Strip PathPrefix from result
+		stat.Key = m.removeObjectStoragePathPrefix(stat.Key)
 		// Check if it's a directory
 		if stat.Mode.IsDir() {
 			return nil, data.ErrIsDirectory
@@ -62,8 +64,9 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 
 	// Handle file creation
 	if flags&data.AccessModeCreate != 0 {
-		// Create the file - use 0644 as default mode for regular files
-		stat, err := m.ObjectStorage.CreateObject(traversal, namespace, key, 0644)
+		// Create the file - use 0644 as default mode for regular files (apply PathPrefix)
+		prefixedKey := m.addObjectStoragePathPrefix(key)
+		stat, err := m.ObjectStorage.CreateObject(traversal, prefixedKey, 0644)
 		if err != nil && err != data.ErrExist {
 			return nil, err
 		}
@@ -72,19 +75,24 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 			return nil, data.ErrExist
 		}
 
-		// Sync to MetadataService if available (only if newly created)
-		if err == nil && m.Metadata != nil {
-			meta := stat.ToMetadata()
-			if syncErr := m.Metadata.CreateMeta(traversal, namespace, meta); syncErr != nil && syncErr != data.ErrExist {
-				// TODO :: Missing internal log for tracking internal errors
-				fmt.Printf("WARNING: Failed to sync file creation to MetadataService: %v\n", syncErr)
+		// Strip PathPrefix from result before syncing to MetadataService
+		if err == nil {
+			stat.Key = m.removeObjectStoragePathPrefix(stat.Key)
+			// Sync to MetadataService if available (only if newly created)
+			if m.Metadata != nil {
+				meta := stat.ToMetadata()
+				if syncErr := m.Metadata.CreateMeta(traversal, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
+					// TODO :: Missing internal log for tracking internal errors
+					fmt.Printf("WARNING: Failed to sync file creation to MetadataService: %v\n", syncErr)
+				}
 			}
 		}
 	}
 
 	// Handle truncation
 	if flags&data.AccessModeTrunc != 0 {
-		if err := m.ObjectStorage.TruncateObject(traversal, namespace, key, 0); err != nil {
+		prefixedKey := m.addObjectStoragePathPrefix(key)
+		if err := m.ObjectStorage.TruncateObject(traversal, prefixedKey, 0); err != nil {
 			return nil, err
 		}
 
@@ -96,7 +104,7 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 					Size: 0,
 				},
 			}
-			if updateErr := m.Metadata.UpdateMeta(traversal, namespace, key, update); updateErr != nil && updateErr != data.ErrNotExist {
+			if updateErr := m.Metadata.UpdateMeta(traversal, m.Options.Namespace, key, update); updateErr != nil && updateErr != data.ErrNotExist {
 				// TODO :: Missing internal log for tracking internal errors
 				fmt.Printf("WARNING: Failed to sync truncate to metadata service: %v\n", updateErr)
 			}
@@ -106,11 +114,14 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 	// Determine initial offset for append mode
 	offset := int64(0)
 	if flags&data.AccessModeAppend != 0 {
-		// Get file size for append
-		stat, err := m.ObjectStorage.HeadObject(traversal, namespace, key)
+		// Get file size for append (apply PathPrefix)
+		prefixedKey := m.addObjectStoragePathPrefix(key)
+		stat, err := m.ObjectStorage.HeadObject(traversal, prefixedKey)
 		if err != nil {
 			return nil, err
 		}
+		// Strip PathPrefix from result
+		stat.Key = m.removeObjectStoragePathPrefix(stat.Key)
 		offset = stat.Size
 	}
 
@@ -166,8 +177,9 @@ func (m *Mount) ReadFile(ctx context.Context, path string, offset, size int64) (
 	// Allocate buffer for read
 	buffer := make([]byte, size)
 
-	// Read from ObjectStorage
-	n, err := m.ObjectStorage.ReadObject(ctx, m.Options.Namespace, path, offset, buffer)
+	// Read from ObjectStorage (apply PathPrefix)
+	prefixedPath := m.addObjectStoragePathPrefix(path)
+	n, err := m.ObjectStorage.ReadObject(ctx, prefixedPath, offset, buffer)
 	if err != nil {
 		return nil, err
 	}
@@ -210,20 +222,23 @@ func (m *Mount) WriteFile(ctx context.Context, path string, offset int64, buffer
 	if err := m.validateObjectSize(writeEnd); err != nil {
 		return 0, err
 	}
-	// Write to ObjectStorage
-	n, err := m.ObjectStorage.WriteObject(ctx, m.Options.Namespace, path, offset, buffer)
+	// Write to ObjectStorage (apply PathPrefix)
+	prefixedPath := m.addObjectStoragePathPrefix(path)
+	n, err := m.ObjectStorage.WriteObject(ctx, prefixedPath, offset, buffer)
 	if err != nil {
 		return 0, err
 	}
 
 	// Sync write to MetadataService if available (update size and modify time)
 	if m.Metadata != nil {
-		// Get current file size after write
-		stat, statErr := m.ObjectStorage.HeadObject(ctx, m.Options.Namespace, path)
+		// Get current file size after write (apply PathPrefix)
+		stat, statErr := m.ObjectStorage.HeadObject(ctx, prefixedPath)
 		if statErr != nil {
 			// TODO :: Missing internal log for tracking internal errors
 			fmt.Printf("WARNING: Failed to get file stat after write for metadata sync: %v\n", statErr)
 		} else {
+			// Strip PathPrefix from result before syncing to metadata
+			stat.Key = m.removeObjectStoragePathPrefix(stat.Key)
 			update := data.MetadataUpdate{
 				Mask: data.MetadataUpdateSize,
 				Metadata: data.Metadata{
@@ -308,14 +323,16 @@ func (m *Mount) StatMetadata(ctx context.Context, path string) (data.Metadata, e
 	if !caps.SupportsOperation(service.ObjectStorageOperationRead) {
 		return data.Metadata{}, errors.ErrOperationNotSupported
 	}
-	// Get stat from ObjectStorage
-	stat, err := m.ObjectStorage.HeadObject(ctx, m.Options.Namespace, path)
+	// Get stat from ObjectStorage (apply PathPrefix)
+	prefixedPath := m.addObjectStoragePathPrefix(path)
+	stat, err := m.ObjectStorage.HeadObject(ctx, prefixedPath)
 	m.mu.RUnlock()
 
 	if err != nil {
 		return data.Metadata{}, err
 	}
-	// Convert into metadata
+	// Strip PathPrefix from result and convert to metadata
+	stat.Key = m.removeObjectStoragePathPrefix(stat.Key)
 	meta := stat.ToMetadata()
 
 	if m.Metadata != nil {
@@ -372,8 +389,9 @@ func (m *Mount) LookupMetadata(ctx context.Context, path string, quick bool) (bo
 	if !caps.SupportsOperation(service.ObjectStorageOperationRead) {
 		return false, errors.ErrOperationNotSupported
 	}
-	// Get stat from ObjectStorage
-	stat, err := m.ObjectStorage.HeadObject(ctx, m.Options.Namespace, path)
+	// Get stat from ObjectStorage (apply PathPrefix)
+	prefixedPath := m.addObjectStoragePathPrefix(path)
+	stat, err := m.ObjectStorage.HeadObject(ctx, prefixedPath)
 	if err != nil {
 		return false, err
 	}
@@ -422,16 +440,13 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]data.Metadata
 		if err != nil {
 			return nil, err
 		}
-
 		// Calculate mount point prefix
 		prefix := strings.TrimSuffix(strings.TrimSuffix(path, relativePath), "/")
-
 		// Adjust paths: prepend mount point to make paths absolute from root
 		clonedMetas := data.BatchMetadata(metas, func(m data.Metadata, i int) data.Metadata {
 			m.Key = prefix + "/" + m.Key
 			return m
 		})
-
 		// Cascade to metadata (store unadjusted paths so mount is relocatable)
 		if m.Metadata != nil && m.Options.Cascading {
 			m.mu.Lock()
@@ -457,15 +472,18 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]data.Metadata
 	if !caps.SupportsOperation(service.ObjectStorageOperationList) {
 		return nil, errors.ErrOperationNotSupported
 	}
-
-	stats, err := m.ObjectStorage.ListObjects(ctx, m.Options.Namespace, path)
+	// List objects from ObjectStorage (apply PathPrefix)
+	prefixedPath := m.addObjectStoragePathPrefix(path)
+	stats, err := m.ObjectStorage.ListObjects(ctx, prefixedPath)
 	m.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
-	// Convert into metadata
+
 	metas := make([]data.Metadata, len(stats))
+	// Convert into metadata and trim prefix if required
 	for i, stat := range stats {
+		stat.Key = m.removeObjectStoragePathPrefix(stat.Key)
 		metas[i] = stat.ToMetadata()
 	}
 
@@ -530,7 +548,6 @@ func (m *Mount) CreateDirectory(ctx context.Context, path string) (data.Metadata
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	// Check path to validate against constraints
 	if err := m.validatePathLength(path); err != nil {
 		return data.Metadata{}, fmt.Errorf("failed to validate path: %v", err)
@@ -543,14 +560,16 @@ func (m *Mount) CreateDirectory(ctx context.Context, path string) (data.Metadata
 	if !caps.SupportsOperation(service.ObjectStorageOperationCreate) {
 		return data.Metadata{}, errors.ErrOperationNotSupported
 	}
-
-	// Create directory in ObjectStorage (use directory mode 0755 | ModeDir)
-	stat, err := m.ObjectStorage.CreateObject(ctx, m.Options.Namespace, path, data.FileMode(0755)|data.ModeDir)
+	// Create directory in ObjectStorage (use directory mode 0755 | ModeDir, apply PathPrefix)
+	prefixedPath := m.addObjectStoragePathPrefix(path)
+	stat, err := m.ObjectStorage.CreateObject(ctx, prefixedPath, data.FileMode(0755)|data.ModeDir)
 	if err != nil {
 		return data.Metadata{}, err
 	}
-	// Sync to MetadataService if available
+	// Strip PathPrefix from result and convert to metadata
+	stat.Key = m.removeObjectStoragePathPrefix(stat.Key)
 	meta := stat.ToMetadata()
+
 	if m.Metadata != nil {
 		if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
 			// TODO :: Missing internal log for tracking internal errors
@@ -606,8 +625,9 @@ func (m *Mount) RemoveDirectory(ctx context.Context, path string, force bool) er
 	if !caps.SupportsOperation(service.ObjectStorageOperationDelete) {
 		return errors.ErrOperationNotSupported
 	}
-	// Delete directory from ObjectStorage
-	err := m.ObjectStorage.DeleteObject(ctx, m.Options.Namespace, path, force)
+	// Delete directory from ObjectStorage (apply PathPrefix)
+	prefixedPath := m.addObjectStoragePathPrefix(path)
+	err := m.ObjectStorage.DeleteObject(ctx, prefixedPath, force)
 	if err != nil {
 		return err
 	}
@@ -666,8 +686,9 @@ func (m *Mount) UnlinkFile(ctx context.Context, path string) error {
 	if !caps.SupportsOperation(service.ObjectStorageOperationDelete) {
 		return errors.ErrOperationNotSupported
 	}
-	// Delete from ObjectStorage
-	err := m.ObjectStorage.DeleteObject(ctx, m.Options.Namespace, path, false)
+	// Delete from ObjectStorage (apply PathPrefix)
+	prefixedPath := m.addObjectStoragePathPrefix(path)
+	err := m.ObjectStorage.DeleteObject(ctx, prefixedPath, false)
 	if err != nil {
 		return err
 	}

@@ -19,12 +19,12 @@ func (s *PostgresObjectStorageService) GetLifecycle() service.Lifecycle {
 }
 
 // CreateObject creates a new file or directory in the storage
-func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
+func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	// Check if path exists in B-tree
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	if _, exists := s.driver.keys.Get(namedKey); exists {
 		return data.FileStat{}, data.ErrExist
 	}
@@ -32,7 +32,7 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key
 	// Verify parent directory exists
 	parentKey := path.Dir(key)
 	if parentKey != "." && parentKey != "" {
-		parentNamedKey := service.NamedKey(ns, parentKey, ":")
+		parentNamedKey := parentKey
 		parentID, exists := s.driver.keys.Get(parentNamedKey)
 		if !exists {
 			return data.FileStat{}, data.ErrNotExist
@@ -70,7 +70,7 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key
 	_, err = conn.Exec(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, modify_time, access_time, create_time)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, meta.ID, ns, key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
+	`, meta.ID, "", key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
 
 	if err != nil {
 		return data.FileStat{}, fmt.Errorf("failed to insert metadata: %w", err)
@@ -89,12 +89,12 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, ns, key
 }
 
 // ReadObject reads data from an object at the specified offset
-func (s *PostgresObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *PostgresObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	// Check B-tree for key existence
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return 0, data.ErrNotExist
@@ -150,12 +150,12 @@ func (s *PostgresObjectStorageService) ReadObject(ctx context.Context, ns, key s
 }
 
 // WriteObject writes data to an object at the specified offset
-func (s *PostgresObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *PostgresObjectStorageService) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	// Check if key exists and get ID
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return 0, data.ErrNotExist
@@ -256,12 +256,12 @@ func (s *PostgresObjectStorageService) WriteObject(ctx context.Context, ns, key 
 }
 
 // DeleteObject deletes an object (file or directory)
-func (s *PostgresObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
+func (s *PostgresObjectStorageService) DeleteObject(ctx context.Context, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	// Check if key exists
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return data.ErrNotExist
@@ -407,13 +407,13 @@ func (s *PostgresObjectStorageService) deleteObjectInternal(ctx context.Context,
 }
 
 // ListObjects lists direct children of a directory or returns info for a file
-func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
+func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	// For root directory, skip the existence check - root is implicit
 	if key != "" {
-		namedKey := service.NamedKey(ns, key, ":")
+		namedKey := key
 		id, exists := s.driver.keys.Get(namedKey)
 		if !exists {
 			return nil, data.ErrNotExist
@@ -460,7 +460,7 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 	}
 
 	// For directories, use B-tree range scan to find children
-	nsPrefixKey := service.NamedKey(ns, key, ":")
+	nsPrefixKey := key
 	if key != "" {
 		nsPrefixKey += "/"
 	}
@@ -472,7 +472,7 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 	// B-tree range scan: iterate over all paths starting with prefix
 	s.driver.keys.Scan(func(nsChildPath string, childID string) bool {
 		// Skip the directory itself
-		if nsChildPath == service.NamedKey(ns, key, ":") {
+		if nsChildPath == key {
 			return true
 		}
 
@@ -500,7 +500,7 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 					dirKey += "/"
 				}
 				dirKey += childName
-				dirNamedKey := service.NamedKey(ns, dirKey, ":")
+				dirNamedKey := dirKey
 				if dirID, exists := s.driver.keys.Get(dirNamedKey); exists {
 					directChildren[childName] = dirID
 				}
@@ -545,12 +545,12 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, ns, key 
 }
 
 // HeadObject returns metadata for an object without reading its content
-func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
+func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	// Check B-tree for key existence
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return data.FileStat{}, data.ErrNotExist
@@ -592,12 +592,12 @@ func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, ns, key s
 }
 
 // TruncateObject resizes an object to the specified size
-func (s *PostgresObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
+func (s *PostgresObjectStorageService) TruncateObject(ctx context.Context, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	// Check if key exists and get ID
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return data.ErrNotExist

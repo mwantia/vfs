@@ -37,6 +37,9 @@ type S3BackendConfig struct {
 	BucketName string `json:"bucket_name"`
 
 	//
+	PathPrefix string `json:"path_prefix"`
+
+	//
 	AccessKey string `json:"access_key"`
 
 	//

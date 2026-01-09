@@ -201,6 +201,34 @@ func (m *Mount) injectMountEntries(dirPath string, entries []data.Metadata) []da
 	return result
 }
 
+func (m *Mount) addObjectStoragePathPrefix(path string) string {
+	if m.Options.PathPrefix == "" {
+		return path
+	}
+
+	var prefixedPath string
+	if strings.HasSuffix(m.Options.PathPrefix, "/") {
+		prefixedPath = m.Options.PathPrefix + path
+	} else {
+		prefixedPath = m.Options.PathPrefix + "/" + path
+	}
+	after, _ := strings.CutSuffix(prefixedPath, "/")
+	return after
+}
+
+func (m *Mount) removeObjectStoragePathPrefix(prefixedPath string) string {
+	if m.Options.PathPrefix == "" {
+		return prefixedPath
+	}
+
+	pathPrefix := m.Options.PathPrefix
+	if !strings.HasSuffix(pathPrefix, "/") {
+		pathPrefix = pathPrefix + "/"
+	}
+
+	return strings.TrimPrefix(prefixedPath, pathPrefix)
+}
+
 // validatePathLength checks if the path exceeds the maximum path length constraint
 func (m *Mount) validatePathLength(path string) error {
 	caps := m.ObjectStorage.GetLifecycle().GetCapabilities()

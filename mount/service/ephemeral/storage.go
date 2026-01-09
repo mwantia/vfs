@@ -15,12 +15,12 @@ func (s *EphemeralObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (eos *EphemeralObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 
 	// Check if object already exists
-	named := service.NamedKey(ns, key, ":")
+	named := key
 	if _, exists := eos.driver.stats[named]; exists {
 		return data.FileStat{}, data.ErrExist
 	}
@@ -28,7 +28,7 @@ func (eos *EphemeralObjectStorageService) CreateObject(ctx context.Context, ns, 
 	// Verify parent directory exists (except for root)
 	parentKey := path.Dir(key)
 	if parentKey != "." && parentKey != "" && parentKey != "/" {
-		parentNamed := service.NamedKey(ns, parentKey, ":")
+		parentNamed := parentKey
 		parentStat, exists := eos.driver.stats[parentNamed]
 		if !exists {
 			return data.FileStat{}, data.ErrNotExist
@@ -67,12 +67,12 @@ func (eos *EphemeralObjectStorageService) CreateObject(ctx context.Context, ns, 
 	return stat, nil
 }
 
-func (eos *EphemeralObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
+func (eos *EphemeralObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, buffer []byte) (int, error) {
 	eos.driver.mu.RLock()
 	defer eos.driver.mu.RUnlock()
 
 	// Get object stat
-	named := service.NamedKey(ns, key, ":")
+	named := key
 	stat, exists := eos.driver.stats[named]
 	if !exists {
 		return 0, data.ErrNotExist
@@ -102,12 +102,12 @@ func (eos *EphemeralObjectStorageService) ReadObject(ctx context.Context, ns, ke
 	return n, nil
 }
 
-func (eos *EphemeralObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
+func (eos *EphemeralObjectStorageService) WriteObject(ctx context.Context, key string, offset int64, buffer []byte) (int, error) {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 
 	// Get object stat
-	named := service.NamedKey(ns, key, ":")
+	named := key
 	stat, exists := eos.driver.stats[named]
 	if !exists {
 		return 0, data.ErrNotExist
@@ -149,12 +149,12 @@ func (eos *EphemeralObjectStorageService) WriteObject(ctx context.Context, ns, k
 	return len(buffer), nil
 }
 
-func (eos *EphemeralObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
+func (eos *EphemeralObjectStorageService) DeleteObject(ctx context.Context, key string, force bool) error {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 
 	// Get object stat
-	named := service.NamedKey(ns, key, ":")
+	named := key
 	stat, exists := eos.driver.stats[named]
 	if !exists {
 		return data.ErrNotExist
@@ -193,13 +193,13 @@ func (eos *EphemeralObjectStorageService) DeleteObject(ctx context.Context, ns, 
 	return nil
 }
 
-func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
 	eos.driver.mu.RLock()
 	defer eos.driver.mu.RUnlock()
 
 	// For non-root paths, verify the directory exists
 	if key != "" {
-		named := service.NamedKey(ns, key, ":")
+		named := key
 		stat, exists := eos.driver.stats[named]
 		if !exists {
 			return nil, data.ErrNotExist
@@ -212,7 +212,7 @@ func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, k
 	}
 
 	// List directory contents (direct children only)
-	prefix := service.NamedKey(ns, key, ":")
+	prefix := key
 	if key != "" {
 		prefix += "/"
 	}
@@ -247,7 +247,7 @@ func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, k
 				}
 				dirKey += childName
 
-				dirNamed := service.NamedKey(ns, dirKey, ":")
+				dirNamed := dirKey
 				if dirStat, exists := eos.driver.stats[dirNamed]; exists {
 					children[childName] = dirStat
 				}
@@ -267,12 +267,12 @@ func (eos *EphemeralObjectStorageService) ListObjects(ctx context.Context, ns, k
 	return result, nil
 }
 
-func (eos *EphemeralObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
+func (eos *EphemeralObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	eos.driver.mu.RLock()
 	defer eos.driver.mu.RUnlock()
 
 	// Get object stat
-	named := service.NamedKey(ns, key, ":")
+	named := key
 	stat, exists := eos.driver.stats[named]
 	if !exists {
 		return data.FileStat{}, data.ErrNotExist
@@ -281,12 +281,12 @@ func (eos *EphemeralObjectStorageService) HeadObject(ctx context.Context, ns, ke
 	return stat, nil
 }
 
-func (eos *EphemeralObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
+func (eos *EphemeralObjectStorageService) TruncateObject(ctx context.Context, key string, size int64) error {
 	eos.driver.mu.Lock()
 	defer eos.driver.mu.Unlock()
 
 	// Get object stat
-	named := service.NamedKey(ns, key, ":")
+	named := key
 	stat, exists := eos.driver.stats[named]
 	if !exists {
 		return data.ErrNotExist

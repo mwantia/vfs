@@ -15,12 +15,12 @@ func (s *S3ObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *S3ObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
+func (s *S3ObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	bucket := s.driver.cfg.BucketName
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 	now := time.Now()
 
 	// Check if object already exists
@@ -79,12 +79,12 @@ func (s *S3ObjectStorageService) CreateObject(ctx context.Context, ns, key strin
 	}, nil
 }
 
-func (s *S3ObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
+func (s *S3ObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, buffer []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	bucket := s.driver.cfg.BucketName
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 
 	// Get object info to check if it exists and is not a directory
 	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
@@ -144,12 +144,12 @@ func (s *S3ObjectStorageService) ReadObject(ctx context.Context, ns, key string,
 	return n, nil
 }
 
-func (s *S3ObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
+func (s *S3ObjectStorageService) WriteObject(ctx context.Context, key string, offset int64, buffer []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	bucket := s.driver.cfg.BucketName
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 
 	// S3 doesn't support partial writes - we need to read-modify-write
 	// First, check if object exists
@@ -205,12 +205,12 @@ func (s *S3ObjectStorageService) WriteObject(ctx context.Context, ns, key string
 	return len(buffer), nil
 }
 
-func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
+func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	bucket := s.driver.cfg.BucketName
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 
 	// Try to stat the object
 	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
@@ -292,12 +292,12 @@ func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, ns, key strin
 	return s.driver.client.RemoveObject(ctx, bucket, named, minio.RemoveObjectOptions{})
 }
 
-func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
+func (s *S3ObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	bucket := s.driver.cfg.BucketName
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 
 	// Build prefix for listing
 	prefix := named
@@ -375,12 +375,12 @@ func (s *S3ObjectStorageService) ListObjects(ctx context.Context, ns, key string
 	return stats, nil
 }
 
-func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
+func (s *S3ObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	bucket := s.driver.cfg.BucketName
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 
 	// Try to stat the object directly
 	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
@@ -434,12 +434,12 @@ func (s *S3ObjectStorageService) HeadObject(ctx context.Context, ns, key string)
 	return data.FileStat{}, err
 }
 
-func (s *S3ObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
+func (s *S3ObjectStorageService) TruncateObject(ctx context.Context, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	bucket := s.driver.cfg.BucketName
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 
 	// Check if object exists
 	objInfo, err := s.driver.client.StatObject(ctx, bucket, named, minio.StatObjectOptions{})
@@ -501,16 +501,14 @@ func (s *S3ObjectStorageService) TruncateObject(ctx context.Context, ns, key str
 
 // Helper functions
 
-// buildNamedKey combines namespace and key with "/" separator for S3
-// If key has leading "/", it strips it since S3 keys should be relative
-func (s *S3ObjectStorageService) buildNamedKey(ns, key string) string {
+// buildNamedKey strips leading "/" from key if present since S3 keys should be relative
+func (s *S3ObjectStorageService) buildNamedKey(key string) string {
 	// Strip leading "/" from key if present (S3 keys are relative)
 	if len(key) > 0 && key[0] == '/' {
 		key = key[1:]
 	}
 
-	// Use "/" separator for S3 (hierarchical namespace)
-	return service.NamedKey(ns, key, "/")
+	return key
 }
 
 // objectInfoToFileStat converts S3 ObjectInfo to FileStat

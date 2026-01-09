@@ -18,7 +18,7 @@ func (s *DirectObjectStorageService) GetLifecycle() service.Lifecycle {
 }
 
 // CreateObject creates a new file or directory in the filesystem
-func (s *DirectObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
+func (s *DirectObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -52,7 +52,7 @@ func (s *DirectObjectStorageService) CreateObject(ctx context.Context, ns, key s
 }
 
 // ReadObject reads data from a file at the specified offset
-func (s *DirectObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *DirectObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -85,7 +85,7 @@ func (s *DirectObjectStorageService) ReadObject(ctx context.Context, ns, key str
 }
 
 // WriteObject writes data to a file at the specified offset
-func (s *DirectObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *DirectObjectStorageService) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -113,7 +113,7 @@ func (s *DirectObjectStorageService) WriteObject(ctx context.Context, ns, key st
 }
 
 // DeleteObject deletes a file or directory
-func (s *DirectObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
+func (s *DirectObjectStorageService) DeleteObject(ctx context.Context, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -139,7 +139,7 @@ func (s *DirectObjectStorageService) DeleteObject(ctx context.Context, ns, key s
 }
 
 // ListObjects lists directory contents or returns info for a single file
-func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
+func (s *DirectObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -188,7 +188,7 @@ func (s *DirectObjectStorageService) ListObjects(ctx context.Context, ns, key st
 }
 
 // HeadObject returns metadata for a file or directory
-func (s *DirectObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
+func (s *DirectObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -210,7 +210,7 @@ func (s *DirectObjectStorageService) HeadObject(ctx context.Context, ns, key str
 }
 
 // TruncateObject resizes a file to the specified size
-func (s *DirectObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
+func (s *DirectObjectStorageService) TruncateObject(ctx context.Context, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 

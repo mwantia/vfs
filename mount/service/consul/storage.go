@@ -16,11 +16,11 @@ func (s *ConsulObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
+func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 	// Check if object already exists
 	pair, _, err := s.driver.kv.Get(named, nil)
 	if err != nil {
@@ -34,7 +34,7 @@ func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	if key != "" && key != "/" {
 		parentKey := path.Dir(key)
 		if parentKey != "." && parentKey != "" && parentKey != "/" {
-			parentConsulKey := s.buildNamedKey(ns, parentKey)
+			parentConsulKey := s.buildNamedKey(parentKey)
 
 			// Check if parent is a file (files block directory creation)
 			parent, _, err := s.driver.kv.Get(parentConsulKey, nil)
@@ -98,11 +98,11 @@ func (s *ConsulObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	}, nil
 }
 
-func (s *ConsulObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
+func (s *ConsulObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, buffer []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 	pair, _, err := s.driver.kv.Get(named, nil)
 	if err != nil {
 		return 0, err
@@ -135,11 +135,11 @@ func (s *ConsulObjectStorageService) ReadObject(ctx context.Context, ns, key str
 	return n, nil
 }
 
-func (s *ConsulObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, buffer []byte) (int, error) {
+func (s *ConsulObjectStorageService) WriteObject(ctx context.Context, key string, offset int64, buffer []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 	pair, _, err := s.driver.kv.Get(named, nil)
 	if err != nil {
 		return 0, err
@@ -180,11 +180,11 @@ func (s *ConsulObjectStorageService) WriteObject(ctx context.Context, ns, key st
 	return len(buffer), nil
 }
 
-func (s *ConsulObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
+func (s *ConsulObjectStorageService) DeleteObject(ctx context.Context, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 
 	// Check for file key (without trailing /)
 	pair, _, err := s.driver.kv.Get(named, nil)
@@ -242,13 +242,13 @@ func (s *ConsulObjectStorageService) DeleteObject(ctx context.Context, ns, key s
 	return nil
 }
 
-func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
+func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	// Special case: if key is not root, check if it's actually a file
 	if key != "" && key != "/" {
-		named := s.buildNamedKey(ns, key)
+		named := s.buildNamedKey(key)
 		pair, _, err := s.driver.kv.Get(named, nil)
 
 		if err == nil && pair != nil {
@@ -270,7 +270,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 	}
 
 	// Build Consul prefix for listing children
-	namedPrefix := s.buildNamedKey(ns, key)
+	namedPrefix := s.buildNamedKey(key)
 	if namedPrefix != "" {
 		namedPrefix += "/"
 	}
@@ -283,7 +283,7 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 
 	// If no children and key doesn't exist, directory doesn't exist
 	if len(childrens) == 0 && key != "" && key != "/" {
-		named := s.buildNamedKey(ns, key)
+		named := s.buildNamedKey(key)
 
 		// Check for file key
 		pair, _, _ := s.driver.kv.Get(named, nil)
@@ -391,11 +391,11 @@ func (s *ConsulObjectStorageService) ListObjects(ctx context.Context, ns, key st
 	return result, nil
 }
 
-func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
+func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 
 	// Check for file key (without trailing /)
 	pair, _, err := s.driver.kv.Get(named, nil)
@@ -453,11 +453,11 @@ func (s *ConsulObjectStorageService) HeadObject(ctx context.Context, ns, key str
 	return data.FileStat{}, data.ErrNotExist
 }
 
-func (s *ConsulObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
+func (s *ConsulObjectStorageService) TruncateObject(ctx context.Context, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	named := s.buildNamedKey(ns, key)
+	named := s.buildNamedKey(key)
 	pair, _, err := s.driver.kv.Get(named, nil)
 	if err != nil {
 		return err
@@ -501,7 +501,7 @@ func (s *ConsulObjectStorageService) TruncateObject(ctx context.Context, ns, key
 }
 
 // buildKey constructs the full Consul KV key from the object key
-func (s *ConsulObjectStorageService) buildNamedKey(ns, key string) string {
+func (s *ConsulObjectStorageService) buildNamedKey(key string) string {
 	// Remove leading / from key if present
 	if len(key) > 0 && key[0] == '/' {
 		key = key[1:]
@@ -509,7 +509,7 @@ func (s *ConsulObjectStorageService) buildNamedKey(ns, key string) string {
 
 	// Handle "/" prefix specially - it means no prefix, just use the key
 	if s.driver.cfg.Prefix == "/" {
-		return service.NamedKey(ns, key, "/")
+		return key
 	}
 
 	// For other prefixes, ensure they end with /
@@ -518,5 +518,5 @@ func (s *ConsulObjectStorageService) buildNamedKey(ns, key string) string {
 		prefix += "/"
 	}
 
-	return service.NamedKey(ns, prefix+key, "/")
+	return prefix + key
 }

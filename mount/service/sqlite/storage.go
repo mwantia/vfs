@@ -15,11 +15,11 @@ func (s *SqliteObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
-func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key string, mode data.FileMode) (data.FileStat, error) {
+func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 	// Check if key already exists in B-tree
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	if _, exists := s.driver.keys.Get(namedKey); exists {
 		return data.FileStat{}, data.ErrExist
 	}
@@ -27,7 +27,7 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	// Verify parent directory exists (unless this is root)
 	parentKey := path.Dir(key)
 	if parentKey != "." && parentKey != "" {
-		parentNamedKey := service.NamedKey(ns, parentKey, ":")
+		parentNamedKey := parentKey
 		parentID, exists := s.driver.keys.Get(parentNamedKey)
 		if !exists {
 			return data.FileStat{}, data.ErrNotExist
@@ -52,7 +52,7 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	_, err := s.driver.db.ExecContext(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, modify_time, access_time, create_time)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, meta.ID, ns, key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
+	`, meta.ID, "", key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
 
 	if err != nil {
 		return data.FileStat{}, err
@@ -82,11 +82,11 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, ns, key s
 	}, nil
 }
 
-func (s *SqliteObjectStorageService) ReadObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *SqliteObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 	// Check B-tree for key existence
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return 0, data.ErrNotExist
@@ -137,12 +137,12 @@ func (s *SqliteObjectStorageService) ReadObject(ctx context.Context, ns, key str
 	return int(toRead), nil
 }
 
-func (s *SqliteObjectStorageService) WriteObject(ctx context.Context, ns, key string, offset int64, dat []byte) (int, error) {
+func (s *SqliteObjectStorageService) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	// Check if key exists and get metadata
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return 0, data.ErrNotExist
@@ -237,12 +237,12 @@ func (s *SqliteObjectStorageService) WriteObject(ctx context.Context, ns, key st
 	return len(dat), nil
 }
 
-func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, ns, key string, force bool) error {
+func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	// Check if key exists
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return data.ErrNotExist
@@ -271,22 +271,16 @@ func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, ns, key s
 		prefixKey := namedKey + "/"
 		var keysToDelete []string
 
-		s.driver.keys.Scan(func(nsChildPath string, _ string) bool {
-			if strings.HasPrefix(nsChildPath, prefixKey) {
-				// Strip namespace prefix to get the actual key
-				childKey := strings.TrimPrefix(nsChildPath, ns+":")
-				if ns != "" && childKey == nsChildPath {
-					// Namespace separation failed, try with colon
-					childKey = strings.TrimPrefix(nsChildPath, ns+":")
-				}
-				keysToDelete = append(keysToDelete, childKey)
+		s.driver.keys.Scan(func(childPath string, _ string) bool {
+			if strings.HasPrefix(childPath, prefixKey) {
+				keysToDelete = append(keysToDelete, childPath)
 			}
 			return true // Continue scanning
 		})
 
 		// Delete all children first (recursive)
 		for _, childKey := range keysToDelete {
-			if err := s.deleteObjectInternal(ctx, ns, childKey); err != nil {
+			if err := s.deleteObjectInternal(ctx,childKey); err != nil {
 				// Continue deleting even if some fail
 				// Could collect errors and return combined error
 			}
@@ -294,14 +288,14 @@ func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, ns, key s
 	}
 
 	// Delete the object itself
-	return s.deleteObjectInternal(ctx, ns, key)
+	return s.deleteObjectInternal(ctx,key)
 }
 
 // deleteObjectInternal deletes a single object without recursive checks
 // MUST be called while holding a write lock
-func (s *SqliteObjectStorageService) deleteObjectInternal(ctx context.Context, ns, key string) error {
+func (s *SqliteObjectStorageService) deleteObjectInternal(ctx context.Context, key string) error {
 	// Check if key exists
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return data.ErrNotExist
@@ -347,13 +341,13 @@ func (s *SqliteObjectStorageService) deleteObjectInternal(ctx context.Context, n
 	return nil
 }
 
-func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key string) ([]data.FileStat, error) {
+func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	// For root directory (key == ""), skip existence check - root is implicit
 	if key != "" {
-		namedKey := service.NamedKey(ns, key, ":")
+		namedKey := key
 		id, exists := s.driver.keys.Get(namedKey)
 		if !exists {
 			return nil, data.ErrNotExist
@@ -394,7 +388,7 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key st
 	}
 
 	// For directories, use B-tree range scan to find children
-	nsPrefixKey := service.NamedKey(ns, key, ":")
+	nsPrefixKey := key
 	if key != "" {
 		nsPrefixKey += "/"
 	}
@@ -429,7 +423,7 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key st
 					dirKey += "/"
 				}
 				dirKey += childName
-				dirNamedKey := service.NamedKey(ns, dirKey, ":")
+				dirNamedKey := dirKey
 				if dirID, exists := s.driver.keys.Get(dirNamedKey); exists {
 					directChildren[childName] = dirID
 				}
@@ -468,11 +462,11 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, ns, key st
 	return result, nil
 }
 
-func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, ns, key string) (data.FileStat, error) {
+func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 	// Check B-tree for key existence
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return data.FileStat{}, data.ErrNotExist
@@ -507,12 +501,12 @@ func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, ns, key str
 	return stat, nil
 }
 
-func (s *SqliteObjectStorageService) TruncateObject(ctx context.Context, ns, key string, size int64) error {
+func (s *SqliteObjectStorageService) TruncateObject(ctx context.Context, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
 	// Check if key exists and get metadata
-	namedKey := service.NamedKey(ns, key, ":")
+	namedKey := key
 	id, exists := s.driver.keys.Get(namedKey)
 	if !exists {
 		return data.ErrNotExist
