@@ -20,21 +20,15 @@ func (s *SqliteMetadataService) ExistsMeta(ctx context.Context, ns, key string) 
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
-	namedKey := service.NamedKey(ns, key, ":")
-	_, exists := s.driver.keys.Get(namedKey)
-	return exists, nil
+	var exists bool
+	err := s.driver.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM vfs_metadata WHERE namespace = ? AND key = ?)", ns, key).Scan(&exists)
+	return exists, err
 }
 
 func (s *SqliteMetadataService) ReadMeta(ctx context.Context, ns, key string) (data.Metadata, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
-
-	// Check B-tree for key existence
-	namedKey := service.NamedKey(ns, key, ":")
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.Metadata{}, data.ErrNotExist
-	}
 
 	// Query full metadata from database
 	var meta data.Metadata
@@ -45,8 +39,8 @@ func (s *SqliteMetadataService) ReadMeta(ctx context.Context, ns, key string) (d
 
 	err := s.driver.db.QueryRowContext(ctx, `
 		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
-		FROM vfs_metadata WHERE id = ?
-	`, id).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
+		FROM vfs_metadata WHERE namespace = ? AND key = ?
+	`, ns, key).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
 		&uid, &gid, &modifyTime, &accessTime, &createTime,
 		&contentType, &etag, &attributesJSON)
 
@@ -90,9 +84,14 @@ func (s *SqliteMetadataService) CreateMeta(ctx context.Context, ns string, meta 
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key already exists in B-tree
-	namedKey := service.NamedKey(ns, meta.Key, ":")
-	if _, exists := s.driver.keys.Get(namedKey); exists {
+	// Check if key already exists
+	var exists bool
+	err := s.driver.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM vfs_metadata WHERE namespace = ? AND key = ?)", ns, meta.Key).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return data.ErrExist
 	}
 
@@ -127,7 +126,7 @@ func (s *SqliteMetadataService) CreateMeta(ctx context.Context, ns string, meta 
 	contentType := string(meta.ContentType)
 
 	// Insert into database
-	_, err := s.driver.db.ExecContext(ctx, `
+	_, err = s.driver.db.ExecContext(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, meta.ID, ns, meta.Key, int(meta.Mode), meta.Size,
@@ -135,26 +134,12 @@ func (s *SqliteMetadataService) CreateMeta(ctx context.Context, ns string, meta 
 		meta.ModifyTime.Unix(), meta.AccessTime.Unix(), meta.CreateTime.Unix(),
 		nullString(contentType), nullString(meta.ETag), attributesJSON)
 
-	if err != nil {
-		return err
-	}
-
-	// Update B-tree with namespaced key
-	s.driver.keys.Set(namedKey, meta.ID)
-
-	return nil
+	return err
 }
 
 func (s *SqliteMetadataService) UpdateMeta(ctx context.Context, ns, key string, update data.MetadataUpdate) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
-
-	// Check if key exists
-	namedKey := service.NamedKey(ns, key, ":")
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.ErrNotExist
-	}
 
 	// Read current metadata
 	var meta data.Metadata
@@ -165,11 +150,14 @@ func (s *SqliteMetadataService) UpdateMeta(ctx context.Context, ns, key string, 
 
 	err := s.driver.db.QueryRowContext(ctx, `
 		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
-		FROM vfs_metadata WHERE id = ?
-	`, id).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
+		FROM vfs_metadata WHERE namespace = ? AND key = ?
+	`, ns, key).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
 		&uid, &gid, &modifyTime, &accessTime, &createTime,
 		&contentType, &etag, &attributesJSON)
 
+	if err == sql.ErrNoRows {
+		return data.ErrNotExist
+	}
 	if err != nil {
 		return err
 	}
@@ -228,7 +216,7 @@ func (s *SqliteMetadataService) UpdateMeta(ctx context.Context, ns, key string, 
 		nullInt64(meta.UID), nullInt64(meta.GID),
 		meta.ModifyTime.Unix(),
 		nullString(newContentType), nullString(meta.ETag), newAttributesJSON,
-		id)
+		meta.ID)
 
 	return err
 }
@@ -237,11 +225,15 @@ func (s *SqliteMetadataService) DeleteMeta(ctx context.Context, ns, key string) 
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists
-	namedKey := service.NamedKey(ns, key, ":")
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
+	// Query metadata to get ID
+	var id string
+	err := s.driver.db.QueryRowContext(ctx,
+		"SELECT id FROM vfs_metadata WHERE namespace = ? AND key = ?", ns, key).Scan(&id)
+	if err == sql.ErrNoRows {
 		return data.ErrNotExist
+	}
+	if err != nil {
+		return err
 	}
 
 	// Start transaction for atomic deletion
@@ -274,14 +266,7 @@ func (s *SqliteMetadataService) DeleteMeta(ctx context.Context, ns, key string) 
 	}
 
 	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	// Remove from B-tree index
-	s.driver.keys.Delete(namedKey)
-
-	return nil
+	return tx.Commit()
 }
 
 func (s *SqliteMetadataService) QueryMeta(ctx context.Context, ns string, query service.Query) (*service.QueryPagination, error) {

@@ -443,7 +443,7 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]data.Metadata
 		// Calculate mount point prefix
 		prefix := strings.TrimSuffix(strings.TrimSuffix(path, relativePath), "/")
 		// Adjust paths: prepend mount point to make paths absolute from root
-		clonedMetas := data.BatchMetadata(metas, func(m data.Metadata, i int) data.Metadata {
+		syncMetas := data.BatchMetadata(metas, func(m data.Metadata, i int) data.Metadata {
 			m.Key = prefix + "/" + m.Key
 			return m
 		})
@@ -451,7 +451,7 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]data.Metadata
 		if m.Metadata != nil && m.Options.Cascading {
 			m.mu.Lock()
 			defer m.mu.Unlock()
-			for _, meta := range metas {
+			for _, meta := range syncMetas {
 				if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
 					// TODO :: Missing internal log for tracking internal errors
 					fmt.Printf("WARNING: Failed to sync directory entry %s to MetadataService: %v\n", meta.Key, syncErr)
@@ -463,7 +463,7 @@ func (m *Mount) ReadDirectory(ctx context.Context, path string) ([]data.Metadata
 			return nil, err
 		}
 
-		return m.injectMountEntries(path, clonedMetas), nil
+		return m.injectMountEntries(path, syncMetas), nil
 	}
 	// Fallback to ObjectStorage only
 	m.mu.RLock()

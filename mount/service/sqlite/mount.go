@@ -28,9 +28,9 @@ func (s *SqliteMountExtensionService) SaveMount(ctx context.Context, path string
 
 	// Insert or replace mount spec in database
 	_, err = s.driver.db.ExecContext(ctx, `
-		INSERT OR REPLACE INTO vfs_mounts (path, object_storage, metadata, spec)
-		VALUES (?, ?, ?, ?)
-	`, path, spec.ObjectStorage, spec.Metadata, string(buf))
+		INSERT OR REPLACE INTO vfs_mounts (path, spec)
+		VALUES (?, ?)
+	`, path, string(buf))
 
 	return err
 }

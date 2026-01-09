@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,32 +22,36 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, key str
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if path exists in B-tree
-	namedKey := key
-	if _, exists := s.driver.keys.Get(namedKey); exists {
+	// Acquire connection
+	conn, err := s.driver.pool.Acquire(ctx)
+	if err != nil {
+		return data.FileStat{}, fmt.Errorf("failed to acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	// Check if key already exists
+	var exists bool
+	err = conn.QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM vfs_metadata WHERE namespace = '' AND key = $1)", key).Scan(&exists)
+	if err != nil {
+		return data.FileStat{}, err
+	}
+	if exists {
 		return data.FileStat{}, data.ErrExist
 	}
 
-	// Verify parent directory exists
+	// Verify parent directory exists (unless this is root)
 	parentKey := path.Dir(key)
 	if parentKey != "." && parentKey != "" {
-		parentNamedKey := parentKey
-		parentID, exists := s.driver.keys.Get(parentNamedKey)
-		if !exists {
-			return data.FileStat{}, data.ErrNotExist
-		}
-
-		// Check if parent is actually a directory
+		// Check if parent exists and is a directory
 		var parentMode data.FileMode
-		conn, err := s.driver.pool.Acquire(ctx)
-		if err != nil {
-			return data.FileStat{}, fmt.Errorf("failed to acquire connection: %w", err)
-		}
-		defer conn.Release()
-
-		err = conn.QueryRow(ctx, "SELECT mode FROM vfs_metadata WHERE id = $1", parentID).Scan(&parentMode)
-		if err != nil {
+		err := conn.QueryRow(ctx,
+			"SELECT mode FROM vfs_metadata WHERE namespace = '' AND key = $1", parentKey).Scan(&parentMode)
+		if err == pgx.ErrNoRows {
 			return data.FileStat{}, data.ErrNotExist
+		}
+		if err != nil {
+			return data.FileStat{}, err
 		}
 		if !parentMode.IsDir() {
 			return data.FileStat{}, data.ErrNotDirectory
@@ -59,13 +62,6 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, key str
 	meta := data.NewFileMetadata(key, 0, mode)
 	now := time.Now()
 
-	// Acquire connection
-	conn, err := s.driver.pool.Acquire(ctx)
-	if err != nil {
-		return data.FileStat{}, fmt.Errorf("failed to acquire connection: %w", err)
-	}
-	defer conn.Release()
-
 	// Insert into database
 	_, err = conn.Exec(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, modify_time, access_time, create_time)
@@ -75,9 +71,6 @@ func (s *PostgresObjectStorageService) CreateObject(ctx context.Context, key str
 	if err != nil {
 		return data.FileStat{}, fmt.Errorf("failed to insert metadata: %w", err)
 	}
-
-	// Update B-tree index
-	s.driver.keys.Set(namedKey, meta.ID)
 
 	return data.FileStat{
 		Key:        key,
@@ -93,24 +86,18 @@ func (s *PostgresObjectStorageService) ReadObject(ctx context.Context, key strin
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
-	// Check B-tree for key existence
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return 0, data.ErrNotExist
-	}
-
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
-	// Query metadata to get mode and size
+	// Query metadata to get ID, mode, and size
+	var id string
 	var mode data.FileMode
 	var size int64
 	err = conn.QueryRow(ctx,
-		"SELECT mode, size FROM vfs_metadata WHERE id = $1", id).Scan(&mode, &size)
+		"SELECT id, mode, size FROM vfs_metadata WHERE namespace = '' AND key = $1", key).Scan(&id, &mode, &size)
 
 	if err == pgx.ErrNoRows {
 		return 0, data.ErrNotExist
@@ -154,24 +141,18 @@ func (s *PostgresObjectStorageService) WriteObject(ctx context.Context, key stri
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists and get ID
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return 0, data.ErrNotExist
-	}
-
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
-	// Query metadata to get mode and current size
+	// Query metadata to get ID, mode, and current size
+	var id string
 	var mode data.FileMode
 	var currentSize int64
 	err = conn.QueryRow(ctx,
-		"SELECT mode, size FROM vfs_metadata WHERE id = $1", id).Scan(&mode, &currentSize)
+		"SELECT id, mode, size FROM vfs_metadata WHERE namespace = '' AND key = $1", key).Scan(&id, &mode, &currentSize)
 
 	if err == pgx.ErrNoRows {
 		return 0, data.ErrNotExist
@@ -260,23 +241,17 @@ func (s *PostgresObjectStorageService) DeleteObject(ctx context.Context, key str
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.ErrNotExist
-	}
-
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
-	// Query metadata to check if it's a directory
+	// Query metadata to get ID and mode
+	var id string
 	var mode data.FileMode
 	err = conn.QueryRow(ctx,
-		"SELECT mode FROM vfs_metadata WHERE id = $1", id).Scan(&mode)
+		"SELECT id, mode FROM vfs_metadata WHERE namespace = '' AND key = $1", key).Scan(&id, &mode)
 
 	if err == pgx.ErrNoRows {
 		return data.ErrNotExist
@@ -292,37 +267,37 @@ func (s *PostgresObjectStorageService) DeleteObject(ctx context.Context, key str
 			return data.ErrIsDirectory
 		}
 
-		// Build prefix for children lookup
-		prefixKey := namedKey
-		if key != "" {
-			prefixKey += "/"
+		// Collect all children for recursive deletion using SQL query
+		pattern := key + "/%"
+		rows, err := conn.Query(ctx,
+			"SELECT id FROM vfs_metadata WHERE namespace = '' AND key LIKE $1", pattern)
+		if err != nil {
+			return fmt.Errorf("failed to query children: %w", err)
+		}
+		defer rows.Close()
+
+		var idsToDelete []string
+		idsToDelete = append(idsToDelete, id) // Include the directory itself
+
+		for rows.Next() {
+			var childID string
+			if err := rows.Scan(&childID); err != nil {
+				return fmt.Errorf("failed to scan child: %w", err)
+			}
+			idsToDelete = append(idsToDelete, childID)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("failed to iterate children: %w", err)
 		}
 
-		// Collect all paths to delete (including this directory)
-		var keysToDelete []string
-		keysToDelete = append(keysToDelete, namedKey)
-
-		// Use B-tree range scan to find all children
-		s.driver.keys.Scan(func(childPath string, _ string) bool {
-			if strings.HasPrefix(childPath, prefixKey) {
-				keysToDelete = append(keysToDelete, childPath)
-			}
-			return true // Continue scanning
-		})
-
-		// Delete all collected paths in transaction
+		// Delete all collected IDs in transaction
 		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to start transaction: %w", err)
 		}
 		defer tx.Rollback(ctx)
 
-		for _, delKey := range keysToDelete {
-			delID, exists := s.driver.keys.Get(delKey)
-			if !exists {
-				continue
-			}
-
+		for _, delID := range idsToDelete {
 			// Delete metadata
 			_, err = tx.Exec(ctx, "DELETE FROM vfs_metadata WHERE id = $1", delID)
 			if err != nil {
@@ -348,20 +323,15 @@ func (s *PostgresObjectStorageService) DeleteObject(ctx context.Context, key str
 			return fmt.Errorf("failed to commit transaction: %w", err)
 		}
 
-		// Remove all from B-tree
-		for _, delKey := range keysToDelete {
-			s.driver.keys.Delete(delKey)
-		}
-
 		return nil
 	}
 
 	// For files, delete directly
-	return s.deleteObjectInternal(ctx, namedKey, id)
+	return s.deleteObjectInternal(ctx, key, id)
 }
 
 // deleteObjectInternal deletes a single object without recursive checks
-func (s *PostgresObjectStorageService) deleteObjectInternal(ctx context.Context, namedKey, id string) error {
+func (s *PostgresObjectStorageService) deleteObjectInternal(ctx context.Context, key, id string) error {
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
@@ -396,14 +366,7 @@ func (s *PostgresObjectStorageService) deleteObjectInternal(ctx context.Context,
 	}
 
 	// Commit transaction
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	// Remove from B-tree index
-	s.driver.keys.Delete(namedKey)
-
-	return nil
+	return tx.Commit(ctx)
 }
 
 // ListObjects lists direct children of a directory or returns info for a file
@@ -413,12 +376,6 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, key stri
 
 	// For root directory, skip the existence check - root is implicit
 	if key != "" {
-		namedKey := key
-		id, exists := s.driver.keys.Get(namedKey)
-		if !exists {
-			return nil, data.ErrNotExist
-		}
-
 		conn, err := s.driver.pool.Acquire(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to acquire connection: %w", err)
@@ -433,8 +390,8 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, key stri
 
 		err = conn.QueryRow(ctx, `
 			SELECT mode, size, modify_time, create_time, content_type
-			FROM vfs_metadata WHERE id = $1
-		`, id).Scan(&mode, &size, &modifyTime, &createTime, &contentType)
+			FROM vfs_metadata WHERE namespace = '' AND key = $1
+		`, key).Scan(&mode, &size, &modifyTime, &createTime, &contentType)
 
 		if err == pgx.ErrNoRows {
 			return nil, data.ErrNotExist
@@ -459,86 +416,59 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, key stri
 		}
 	}
 
-	// For directories, use B-tree range scan to find children
-	nsPrefixKey := key
-	if key != "" {
-		nsPrefixKey += "/"
-	}
-	nsPrefixLen := len(nsPrefixKey)
-
-	// Use map to deduplicate direct children
-	directChildren := make(map[string]string) // childName → ID
-
-	// B-tree range scan: iterate over all paths starting with prefix
-	s.driver.keys.Scan(func(nsChildPath string, childID string) bool {
-		// Skip the directory itself
-		if nsChildPath == key {
-			return true
-		}
-
-		// Check if this path is under our namespace and directory
-		if !strings.HasPrefix(nsChildPath, nsPrefixKey) {
-			return true // Continue scanning
-		}
-
-		// Get relative path (without namespace prefix)
-		rel := nsChildPath[nsPrefixLen:]
-
-		// Skip empty relative paths
-		if rel == "" {
-			return true
-		}
-
-		// Check if this is a direct child (no slash in relative path)
-		if slashIdx := strings.IndexByte(rel, '/'); slashIdx > 0 {
-			// This is a nested child - only track the first segment (directory)
-			childName := rel[:slashIdx]
-			if _, seen := directChildren[childName]; !seen {
-				// Look up the directory metadata ID
-				dirKey := key
-				if dirKey != "" {
-					dirKey += "/"
-				}
-				dirKey += childName
-				dirNamedKey := dirKey
-				if dirID, exists := s.driver.keys.Get(dirNamedKey); exists {
-					directChildren[childName] = dirID
-				}
-			}
-		} else {
-			// Direct child - add to result
-			directChildren[rel] = childID
-		}
-
-		return true // Continue scanning
-	})
-
-	// Query metadata for all direct children
-	result := make([]data.FileStat, 0, len(directChildren))
+	// For directories, use SQL query to find direct children
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
-	for _, childID := range directChildren {
+	var rows pgx.Rows
+	if key == "" {
+		// Root directory: find all entries without a slash
+		rows, err = conn.Query(ctx, `
+			SELECT key, mode, size, modify_time, create_time, content_type
+			FROM vfs_metadata
+			WHERE namespace = '' AND key NOT LIKE '%/%'
+		`)
+	} else {
+		// Subdirectory: find direct children (entries starting with key/ but not containing another /)
+		pattern1 := key + "/%"
+		pattern2 := key + "/%/%"
+		rows, err = conn.Query(ctx, `
+			SELECT key, mode, size, modify_time, create_time, content_type
+			FROM vfs_metadata
+			WHERE namespace = '' AND key LIKE $1 AND key NOT LIKE $2
+		`, pattern1, pattern2)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to query children: %w", err)
+	}
+	defer rows.Close()
+
+	// Process query results
+	var result []data.FileStat
+	for rows.Next() {
 		var stat data.FileStat
 		var modifyTime, createTime int64
 		var contentType *string
 
-		err := conn.QueryRow(ctx, `
-			SELECT key, mode, size, modify_time, create_time, content_type
-			FROM vfs_metadata WHERE id = $1
-		`, childID).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
-
-		if err == nil {
-			stat.CreateTime = time.Unix(createTime, 0)
-			stat.ModifyTime = time.Unix(modifyTime, 0)
-			if contentType != nil {
-				stat.ContentType = data.ContentType(*contentType)
-			}
-			result = append(result, stat)
+		err := rows.Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
+
+		stat.CreateTime = time.Unix(createTime, 0)
+		stat.ModifyTime = time.Unix(modifyTime, 0)
+		if contentType != nil {
+			stat.ContentType = data.ContentType(*contentType)
+		}
+		result = append(result, stat)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate rows: %w", err)
 	}
 
 	return result, nil
@@ -548,13 +478,6 @@ func (s *PostgresObjectStorageService) ListObjects(ctx context.Context, key stri
 func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
-
-	// Check B-tree for key existence
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.FileStat{}, data.ErrNotExist
-	}
 
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
@@ -569,8 +492,8 @@ func (s *PostgresObjectStorageService) HeadObject(ctx context.Context, key strin
 
 	err = conn.QueryRow(ctx, `
 		SELECT key, mode, size, modify_time, create_time, content_type
-		FROM vfs_metadata WHERE id = $1
-	`, id).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
+		FROM vfs_metadata WHERE namespace = '' AND key = $1
+	`, key).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
 
 	if err == pgx.ErrNoRows {
 		return data.FileStat{}, data.ErrNotExist
@@ -596,24 +519,18 @@ func (s *PostgresObjectStorageService) TruncateObject(ctx context.Context, key s
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists and get ID
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.ErrNotExist
-	}
-
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
 
-	// Query metadata to get mode and current size
+	// Query metadata to get ID, mode, and current size
+	var id string
 	var mode data.FileMode
 	var currentSize int64
 	err = conn.QueryRow(ctx,
-		"SELECT mode, size FROM vfs_metadata WHERE id = $1", id).Scan(&mode, &currentSize)
+		"SELECT id, mode, size FROM vfs_metadata WHERE namespace = '' AND key = $1", key).Scan(&id, &mode, &currentSize)
 
 	if err == pgx.ErrNoRows {
 		return data.ErrNotExist

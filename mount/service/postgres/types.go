@@ -5,7 +5,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mwantia/vfs/mount/service"
-	"github.com/tidwall/btree"
 )
 
 var (
@@ -20,10 +19,6 @@ type PostgresMonolithDriver struct {
 
 	// PostgreSQL connection pool
 	pool *pgxpool.Pool
-
-	// In-memory B-tree for fast key → ID lookups
-	// Keys are namespaced: "namespace:key" → metadata ID
-	keys *btree.Map[string, string]
 
 	// Configuration parsed from URI
 	cfg *PostgresBackendConfig

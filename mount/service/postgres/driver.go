@@ -7,7 +7,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mwantia/vfs/mount/service"
-	"github.com/tidwall/btree"
 )
 
 const postgresSchema = `
@@ -53,8 +52,7 @@ func NewPostgresMonolithDriver(uri *service.Uri) (*PostgresMonolithDriver, error
 	cfg := parsePostgresBackendConfig(uri)
 
 	return &PostgresMonolithDriver{
-		cfg:  cfg,
-		keys: btree.NewMap[string, string](0),
+		cfg: cfg,
 	}, nil
 }
 
@@ -156,42 +154,14 @@ func (d *PostgresMonolithDriver) OpenDriver(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
-	// Load all existing keys into B-tree for fast lookups
-	rows, err := conn.Query(ctx, "SELECT namespace, key, id FROM vfs_metadata")
-	if err != nil {
-		pool.Close()
-		return fmt.Errorf("failed to load keys: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var namespace, key, id string
-		if err := rows.Scan(&namespace, &key, &id); err != nil {
-			pool.Close()
-			return fmt.Errorf("failed to scan key: %w", err)
-		}
-
-		// Use NamedKey helper to create namespaced key
-		namedKey := service.NamedKey(namespace, key, ":")
-		d.keys.Set(namedKey, id)
-	}
-
-	if err := rows.Err(); err != nil {
-		pool.Close()
-		return fmt.Errorf("failed to iterate keys: %w", err)
-	}
-
 	d.pool = pool
 	return nil
 }
 
-// CloseDriver cleans up database connection and clears in-memory data
+// CloseDriver cleans up database connection
 func (d *PostgresMonolithDriver) CloseDriver(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
-	// Clear the B-tree index
-	d.keys.Clear()
 
 	// Close database connection pool if it exists
 	if d.pool != nil {

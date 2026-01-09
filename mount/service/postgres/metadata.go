@@ -22,9 +22,20 @@ func (s *PostgresMetadataService) CreateMeta(ctx context.Context, ns string, met
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key already exists in B-tree
-	namedKey := service.NamedKey(ns, meta.Key, ":")
-	if _, exists := s.driver.keys.Get(namedKey); exists {
+	conn, err := s.driver.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	// Check if key already exists
+	var exists bool
+	err = conn.QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM vfs_metadata WHERE namespace = $1 AND key = $2)", ns, meta.Key).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return data.ErrExist
 	}
 
@@ -49,12 +60,6 @@ func (s *PostgresMetadataService) CreateMeta(ctx context.Context, ns string, met
 		}
 	}
 
-	conn, err := s.driver.pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to acquire connection: %w", err)
-	}
-	defer conn.Release()
-
 	contentType := string(meta.ContentType)
 
 	// Insert into database
@@ -70,8 +75,6 @@ func (s *PostgresMetadataService) CreateMeta(ctx context.Context, ns string, met
 		return fmt.Errorf("failed to insert metadata: %w", err)
 	}
 
-	// Update B-tree
-	s.driver.keys.Set(namedKey, meta.ID)
 	return nil
 }
 
@@ -79,13 +82,6 @@ func (s *PostgresMetadataService) CreateMeta(ctx context.Context, ns string, met
 func (s *PostgresMetadataService) ReadMeta(ctx context.Context, ns, key string) (data.Metadata, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
-
-	// Check B-tree first
-	namedKey := service.NamedKey(ns, key, ":")
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.Metadata{}, data.ErrNotExist
-	}
 
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
@@ -102,8 +98,8 @@ func (s *PostgresMetadataService) ReadMeta(ctx context.Context, ns, key string) 
 
 	err = conn.QueryRow(ctx, `
 		SELECT id, key, mode, size, uid, gid, modify_time, access_time, create_time, content_type, etag, attributes
-		FROM vfs_metadata WHERE id = $1
-	`, id).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
+		FROM vfs_metadata WHERE namespace = $1 AND key = $2
+	`, ns, key).Scan(&meta.ID, &meta.Key, &meta.Mode, &meta.Size,
 		&uid, &gid, &modifyTime, &accessTime, &createTime,
 		&contentType, &etag, &attributesJSON)
 
@@ -153,11 +149,21 @@ func (s *PostgresMetadataService) UpdateMeta(ctx context.Context, ns, key string
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists
-	namedKey := service.NamedKey(ns, key, ":")
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
+	conn, err := s.driver.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	// Get ID first
+	var id string
+	err = conn.QueryRow(ctx,
+		"SELECT id FROM vfs_metadata WHERE namespace = $1 AND key = $2", ns, key).Scan(&id)
+	if err == pgx.ErrNoRows {
 		return data.ErrNotExist
+	}
+	if err != nil {
+		return err
 	}
 
 	// Read current metadata
@@ -168,7 +174,7 @@ func (s *PostgresMetadataService) UpdateMeta(ctx context.Context, ns, key string
 
 	// Apply update
 	meta.ModifyTime = time.Now()
-	if _, err := update.Apply(&meta); err != nil {
+	if _, err = update.Apply(&meta); err != nil {
 		return fmt.Errorf("failed to apply update: %w", err)
 	}
 
@@ -180,12 +186,6 @@ func (s *PostgresMetadataService) UpdateMeta(ctx context.Context, ns, key string
 			return fmt.Errorf("failed to marshal attributes: %w", err)
 		}
 	}
-
-	conn, err := s.driver.pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to acquire connection: %w", err)
-	}
-	defer conn.Release()
 
 	contentType := string(meta.ContentType)
 
@@ -212,10 +212,16 @@ func (s *PostgresMetadataService) ExistsMeta(ctx context.Context, ns, key string
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
-	// Check B-tree for key existence
-	namedKey := service.NamedKey(ns, key, ":")
-	_, exists := s.driver.keys.Get(namedKey)
-	return exists, nil
+	conn, err := s.driver.pool.Acquire(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	var exists bool
+	err = conn.QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM vfs_metadata WHERE namespace = $1 AND key = $2)", ns, key).Scan(&exists)
+	return exists, err
 }
 
 // DeleteMeta deletes metadata for an object
@@ -223,18 +229,22 @@ func (s *PostgresMetadataService) DeleteMeta(ctx context.Context, ns, key string
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists
-	namedKey := service.NamedKey(ns, key, ":")
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.ErrNotExist
-	}
-
 	conn, err := s.driver.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
 	defer conn.Release()
+
+	// Get ID first
+	var id string
+	err = conn.QueryRow(ctx,
+		"SELECT id FROM vfs_metadata WHERE namespace = $1 AND key = $2", ns, key).Scan(&id)
+	if err == pgx.ErrNoRows {
+		return data.ErrNotExist
+	}
+	if err != nil {
+		return err
+	}
 
 	// Start transaction
 	tx, err := conn.Begin(ctx)
@@ -264,13 +274,7 @@ func (s *PostgresMetadataService) DeleteMeta(ctx context.Context, ns, key string
 	}
 
 	// Commit transaction
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	// Remove from B-tree
-	s.driver.keys.Delete(namedKey)
-	return nil
+	return tx.Commit(ctx)
 }
 
 // QueryMeta queries metadata with filters, sorting, and pagination

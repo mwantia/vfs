@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/mwantia/vfs/mount/service"
-	"github.com/tidwall/btree"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -14,8 +13,7 @@ func NewSqliteMonolithDriver(uri *service.Uri) (*SqliteMonolithDriver, error) {
 	cfg := parseSqliteBackendConfig(uri)
 
 	return &SqliteMonolithDriver{
-		cfg:  cfg,
-		keys: btree.NewMap[string, string](0),
+		cfg: cfg,
 	}, nil
 }
 
@@ -113,42 +111,14 @@ func (d *SqliteMonolithDriver) OpenDriver(ctx context.Context) error {
 		return err
 	}
 
-	// Load all existing keys into B-tree for fast lookups
-	rows, err := db.QueryContext(ctx, "SELECT namespace, key, id FROM vfs_metadata")
-	if err != nil {
-		db.Close()
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var namespace, key, id string
-		if err := rows.Scan(&namespace, &key, &id); err != nil {
-			db.Close()
-			return err
-		}
-
-		// Use NamedKey helper to create namespaced key
-		namedKey := service.NamedKey(namespace, key, ":")
-		d.keys.Set(namedKey, id)
-	}
-
-	if err := rows.Err(); err != nil {
-		db.Close()
-		return err
-	}
-
 	d.db = db
 	return nil
 }
 
-// CloseDriver cleans up database connection and clears in-memory data
+// CloseDriver cleans up database connection
 func (d *SqliteMonolithDriver) CloseDriver(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
-	// Clear the B-tree index
-	d.keys.Clear()
 
 	// Close database connection if it exists
 	if d.db != nil {

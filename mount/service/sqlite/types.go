@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/mwantia/vfs/mount/service"
-	"github.com/tidwall/btree"
 )
 
 var (
@@ -48,9 +47,7 @@ var (
 	-- Mount specifications (virtual /etc/fstab)
 	CREATE TABLE IF NOT EXISTS vfs_mounts (
 		path TEXT PRIMARY KEY,
-		object_storage TEXT,
-		metadata TEXT,
-		specs TEXT NOT NULL
+		spec TEXT NOT NULL
 	);`
 )
 
@@ -59,10 +56,6 @@ type SqliteMonolithDriver struct {
 
 	// Database connection
 	db *sql.DB
-
-	// In-memory B-tree for fast key → ID lookups
-	// Keys are namespaced: "namespace:key" → metadata ID
-	keys *btree.Map[string, string]
 
 	// Configuration parsed from URI
 	cfg *SqliteBackendConfig

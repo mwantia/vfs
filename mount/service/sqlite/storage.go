@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/mwantia/vfs/data"
@@ -18,26 +17,30 @@ func (s *SqliteObjectStorageService) GetLifecycle() service.Lifecycle {
 func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
-	// Check if key already exists in B-tree
-	namedKey := key
-	if _, exists := s.driver.keys.Get(namedKey); exists {
+
+	// Check if key already exists
+	var exists bool
+	err := s.driver.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM vfs_metadata WHERE namespace = '' AND key = ?)", key).Scan(&exists)
+	if err != nil {
+		return data.FileStat{}, err
+	}
+	if exists {
 		return data.FileStat{}, data.ErrExist
 	}
 
 	// Verify parent directory exists (unless this is root)
 	parentKey := path.Dir(key)
 	if parentKey != "." && parentKey != "" {
-		parentNamedKey := parentKey
-		parentID, exists := s.driver.keys.Get(parentNamedKey)
-		if !exists {
+		// Check if parent exists and is a directory
+		var parentMode data.FileMode
+		err := s.driver.db.QueryRowContext(ctx,
+			"SELECT mode FROM vfs_metadata WHERE namespace = '' AND key = ?", parentKey).Scan(&parentMode)
+		if err == sql.ErrNoRows {
 			return data.FileStat{}, data.ErrNotExist
 		}
-
-		// Check if parent is actually a directory
-		var parentMode data.FileMode
-		err := s.driver.db.QueryRowContext(ctx, "SELECT mode FROM vfs_metadata WHERE id = ?", parentID).Scan(&parentMode)
 		if err != nil {
-			return data.FileStat{}, data.ErrNotExist
+			return data.FileStat{}, err
 		}
 		if !parentMode.IsDir() {
 			return data.FileStat{}, data.ErrNotDirectory
@@ -49,7 +52,7 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, key strin
 	now := time.Now()
 
 	// Insert into database
-	_, err := s.driver.db.ExecContext(ctx, `
+	_, err = s.driver.db.ExecContext(ctx, `
 		INSERT INTO vfs_metadata (id, namespace, key, mode, size, modify_time, access_time, create_time)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, meta.ID, "", key, int(mode), 0, now.Unix(), now.Unix(), now.Unix())
@@ -68,9 +71,6 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, key strin
 		return data.FileStat{}, err
 	}
 
-	// Update B-tree index
-	s.driver.keys.Set(namedKey, meta.ID)
-
 	// Convert to FileStat
 	return data.FileStat{
 		Key:         key,
@@ -85,18 +85,13 @@ func (s *SqliteObjectStorageService) CreateObject(ctx context.Context, key strin
 func (s *SqliteObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
-	// Check B-tree for key existence
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return 0, data.ErrNotExist
-	}
 
-	// Query metadata to get mode and size
+	// Query metadata to get ID, mode, and size
+	var id string
 	var mode data.FileMode
 	var size int64
 	err := s.driver.db.QueryRowContext(ctx,
-		"SELECT mode, size FROM vfs_metadata WHERE id = ?", id).Scan(&mode, &size)
+		"SELECT id, mode, size FROM vfs_metadata WHERE namespace = '' AND key = ?", key).Scan(&id, &mode, &size)
 
 	if err == sql.ErrNoRows {
 		return 0, data.ErrNotExist
@@ -141,18 +136,12 @@ func (s *SqliteObjectStorageService) WriteObject(ctx context.Context, key string
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists and get metadata
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return 0, data.ErrNotExist
-	}
-
-	// Query metadata to get mode and current size
+	// Query metadata to get ID, mode, and current size
+	var id string
 	var mode data.FileMode
 	var currentSize int64
 	err := s.driver.db.QueryRowContext(ctx,
-		"SELECT mode, size FROM vfs_metadata WHERE id = ?", id).Scan(&mode, &currentSize)
+		"SELECT id, mode, size FROM vfs_metadata WHERE namespace = '' AND key = ?", key).Scan(&id, &mode, &currentSize)
 
 	if err == sql.ErrNoRows {
 		return 0, data.ErrNotExist
@@ -241,17 +230,11 @@ func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, key strin
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.ErrNotExist
-	}
-
-	// Query metadata to check if it's a directory
+	// Query metadata to get ID and mode
+	var id string
 	var mode data.FileMode
 	err := s.driver.db.QueryRowContext(ctx,
-		"SELECT mode FROM vfs_metadata WHERE id = ?", id).Scan(&mode)
+		"SELECT id, mode FROM vfs_metadata WHERE namespace = '' AND key = ?", key).Scan(&id, &mode)
 
 	if err == sql.ErrNoRows {
 		return data.ErrNotExist
@@ -267,20 +250,30 @@ func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, key strin
 			return data.ErrIsDirectory
 		}
 
-		// Collect all children for recursive deletion
-		prefixKey := namedKey + "/"
-		var keysToDelete []string
+		// Collect all children for recursive deletion using SQL query
+		pattern := key + "/%"
+		rows, err := s.driver.db.QueryContext(ctx,
+			"SELECT key FROM vfs_metadata WHERE namespace = '' AND key LIKE ?", pattern)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
 
-		s.driver.keys.Scan(func(childPath string, _ string) bool {
-			if strings.HasPrefix(childPath, prefixKey) {
-				keysToDelete = append(keysToDelete, childPath)
+		var keysToDelete []string
+		for rows.Next() {
+			var childKey string
+			if err := rows.Scan(&childKey); err != nil {
+				return err
 			}
-			return true // Continue scanning
-		})
+			keysToDelete = append(keysToDelete, childKey)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
 
 		// Delete all children first (recursive)
 		for _, childKey := range keysToDelete {
-			if err := s.deleteObjectInternal(ctx,childKey); err != nil {
+			if err := s.deleteObjectInternal(ctx, childKey); err != nil {
 				// Continue deleting even if some fail
 				// Could collect errors and return combined error
 			}
@@ -294,11 +287,15 @@ func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, key strin
 // deleteObjectInternal deletes a single object without recursive checks
 // MUST be called while holding a write lock
 func (s *SqliteObjectStorageService) deleteObjectInternal(ctx context.Context, key string) error {
-	// Check if key exists
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
+	// Query metadata to get ID
+	var id string
+	err := s.driver.db.QueryRowContext(ctx,
+		"SELECT id FROM vfs_metadata WHERE namespace = '' AND key = ?", key).Scan(&id)
+	if err == sql.ErrNoRows {
 		return data.ErrNotExist
+	}
+	if err != nil {
+		return err
 	}
 
 	// Start transaction for atomic deletion
@@ -331,14 +328,7 @@ func (s *SqliteObjectStorageService) deleteObjectInternal(ctx context.Context, k
 	}
 
 	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	// Remove from B-tree index
-	s.driver.keys.Delete(namedKey)
-
-	return nil
+	return tx.Commit()
 }
 
 func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
@@ -347,12 +337,6 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, key string
 
 	// For root directory (key == ""), skip existence check - root is implicit
 	if key != "" {
-		namedKey := key
-		id, exists := s.driver.keys.Get(namedKey)
-		if !exists {
-			return nil, data.ErrNotExist
-		}
-
 		// Query metadata to check if it's a file or directory
 		var mode data.FileMode
 		var size int64
@@ -361,8 +345,8 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, key string
 
 		err := s.driver.db.QueryRowContext(ctx, `
 			SELECT mode, size, modify_time, create_time, content_type
-			FROM vfs_metadata WHERE id = ?
-		`, id).Scan(&mode, &size, &modifyTime, &createTime, &contentType)
+			FROM vfs_metadata WHERE namespace = '' AND key = ?
+		`, key).Scan(&mode, &size, &modifyTime, &createTime, &contentType)
 
 		if err == sql.ErrNoRows {
 			return nil, data.ErrNotExist
@@ -387,76 +371,55 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, key string
 		}
 	}
 
-	// For directories, use B-tree range scan to find children
-	nsPrefixKey := key
-	if key != "" {
-		nsPrefixKey += "/"
+	// For directories, use SQL query to find direct children
+	var rows *sql.Rows
+	var err error
+
+	if key == "" {
+		// Root directory: find all entries without a slash
+		rows, err = s.driver.db.QueryContext(ctx, `
+			SELECT key, mode, size, modify_time, create_time, content_type
+			FROM vfs_metadata
+			WHERE namespace = '' AND key NOT LIKE '%/%'
+		`)
+	} else {
+		// Subdirectory: find direct children (entries starting with key/ but not containing another /)
+		pattern1 := key + "/%"
+		pattern2 := key + "/%/%"
+		rows, err = s.driver.db.QueryContext(ctx, `
+			SELECT key, mode, size, modify_time, create_time, content_type
+			FROM vfs_metadata
+			WHERE namespace = '' AND key LIKE ? AND key NOT LIKE ?
+		`, pattern1, pattern2)
 	}
-	nsPrefixLen := len(nsPrefixKey)
 
-	// Use map to deduplicate direct children
-	directChildren := make(map[string]string) // childName -> ID
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
-	// B-tree range scan: iterate over all paths starting with prefix
-	s.driver.keys.Scan(func(nsChildPath string, childID string) bool {
-		// Check if this path is under our namespace and directory
-		if !strings.HasPrefix(nsChildPath, nsPrefixKey) {
-			return true // Continue scanning
-		}
-
-		// Get relative path (without namespace prefix)
-		rel := nsChildPath[nsPrefixLen:]
-
-		// Skip empty relative paths
-		if rel == "" {
-			return true
-		}
-
-		// Check if this is a direct child (no slash in relative path)
-		if slashIdx := strings.IndexByte(rel, '/'); slashIdx > 0 {
-			// This is a nested child - only track the first segment (directory)
-			childName := rel[:slashIdx]
-			if _, seen := directChildren[childName]; !seen {
-				// Look up the directory metadata ID
-				dirKey := key
-				if dirKey != "" {
-					dirKey += "/"
-				}
-				dirKey += childName
-				dirNamedKey := dirKey
-				if dirID, exists := s.driver.keys.Get(dirNamedKey); exists {
-					directChildren[childName] = dirID
-				}
-			}
-		} else {
-			// Direct child - add to result
-			directChildren[rel] = childID
-		}
-
-		// Continue scanning
-		return true
-	})
-
-	// Query metadata for all direct children
-	result := make([]data.FileStat, 0, len(directChildren))
-	for _, childID := range directChildren {
+	// Process query results
+	var result []data.FileStat
+	for rows.Next() {
 		var stat data.FileStat
 		var contentType sql.NullString
 		var modifyTime, createTime int64
 
-		err := s.driver.db.QueryRowContext(ctx, `
-			SELECT key, mode, size, modify_time, create_time, content_type
-			FROM vfs_metadata WHERE id = ?
-		`, childID).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
-
-		if err == nil {
-			stat.CreateTime = time.Unix(createTime, 0)
-			stat.ModifyTime = time.Unix(modifyTime, 0)
-			if contentType.Valid {
-				stat.ContentType = data.ContentType(contentType.String)
-			}
-			result = append(result, stat)
+		err := rows.Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
+		if err != nil {
+			return nil, err
 		}
+
+		stat.CreateTime = time.Unix(createTime, 0)
+		stat.ModifyTime = time.Unix(modifyTime, 0)
+		if contentType.Valid {
+			stat.ContentType = data.ContentType(contentType.String)
+		}
+		result = append(result, stat)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return result, nil
@@ -465,12 +428,6 @@ func (s *SqliteObjectStorageService) ListObjects(ctx context.Context, key string
 func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
-	// Check B-tree for key existence
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.FileStat{}, data.ErrNotExist
-	}
 
 	// Query metadata from database
 	var stat data.FileStat
@@ -479,8 +436,8 @@ func (s *SqliteObjectStorageService) HeadObject(ctx context.Context, key string)
 
 	err := s.driver.db.QueryRowContext(ctx, `
 		SELECT key, mode, size, modify_time, create_time, content_type
-		FROM vfs_metadata WHERE id = ?
-	`, id).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
+		FROM vfs_metadata WHERE namespace = '' AND key = ?
+	`, key).Scan(&stat.Key, &stat.Mode, &stat.Size, &modifyTime, &createTime, &contentType)
 
 	if err == sql.ErrNoRows {
 		return data.FileStat{}, data.ErrNotExist
@@ -505,18 +462,12 @@ func (s *SqliteObjectStorageService) TruncateObject(ctx context.Context, key str
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
-	// Check if key exists and get metadata
-	namedKey := key
-	id, exists := s.driver.keys.Get(namedKey)
-	if !exists {
-		return data.ErrNotExist
-	}
-
-	// Query metadata to get mode and current size
+	// Query metadata to get ID, mode, and current size
+	var id string
 	var mode data.FileMode
 	var currentSize int64
 	err := s.driver.db.QueryRowContext(ctx,
-		"SELECT mode, size FROM vfs_metadata WHERE id = ?", id).Scan(&mode, &currentSize)
+		"SELECT id, mode, size FROM vfs_metadata WHERE namespace = '' AND key = ?", key).Scan(&id, &mode, &currentSize)
 
 	if err == sql.ErrNoRows {
 		return data.ErrNotExist
