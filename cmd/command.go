@@ -15,15 +15,38 @@ func (c *Command) Execute(ctx context.Context, vfs API, cmdString string) (int, 
 		return 1, fmt.Errorf("tokenization failed: %w", err)
 	}
 
-	// Parse pipeline (handles pipes and redirects)
+	// Check if command contains chaining operators
+	hasChaining := containsChainingOperators(tokens)
+
+	executor := NewExecutor(vfs, c)
+
+	if hasChaining {
+		// Parse as command chain
+		chain, err := ParseCommandChain(tokens)
+		if err != nil {
+			return 1, fmt.Errorf("chain parse failed: %w", err)
+		}
+		return executor.ExecuteCommandChain(ctx, chain)
+	}
+
+	// Parse as single pipeline (existing behavior)
 	pipeline, err := ParsePipeline(tokens)
 	if err != nil {
 		return 1, fmt.Errorf("pipeline parse failed: %w", err)
 	}
 
 	// Execute pipeline
-	executor := NewExecutor(vfs, c)
 	return executor.ExecutePipeline(ctx, pipeline)
+}
+
+// containsChainingOperators checks if tokens contain chaining operators
+func containsChainingOperators(tokens []Token) bool {
+	for _, t := range tokens {
+		if t.Type == TokenSemicolon || t.Type == TokenAnd || t.Type == TokenOr {
+			return true
+		}
+	}
+	return false
 }
 
 // AddCommand adds a subcommand to this command

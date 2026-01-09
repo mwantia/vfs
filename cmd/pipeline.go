@@ -254,3 +254,90 @@ func validateRedirects(redirects []*Redirect) error {
 
 	return nil
 }
+
+// ParseCommandChain parses tokens into a command chain
+// Splits by chaining operators (;, &&, ||), then parses each as pipeline
+func ParseCommandChain(tokens []Token) (*CommandChain, error) {
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("empty command")
+	}
+
+	// Split tokens by chaining operators
+	segments, operators, err := splitByChainOperators(tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	chain := &CommandChain{
+		Segments: make([]*ChainSegment, 0, len(segments)),
+	}
+
+	// Parse each segment as a pipeline
+	for i, segmentTokens := range segments {
+		pipeline, err := ParsePipeline(segmentTokens)
+		if err != nil {
+			return nil, fmt.Errorf("segment %d: %w", i+1, err)
+		}
+
+		// Determine operator to next segment
+		var op ChainOperator
+		if i < len(operators) {
+			op = operators[i]
+		} else {
+			op = ChainOpNone
+		}
+
+		chain.Segments = append(chain.Segments, &ChainSegment{
+			Pipeline: pipeline,
+			Operator: op,
+		})
+	}
+
+	return chain, nil
+}
+
+// splitByChainOperators splits tokens into segments by chaining operators
+func splitByChainOperators(tokens []Token) ([][]Token, []ChainOperator, error) {
+	var segments [][]Token
+	var operators []ChainOperator
+	var current []Token
+
+	for _, token := range tokens {
+		switch token.Type {
+		case TokenSemicolon:
+			if len(current) == 0 {
+				return nil, nil, fmt.Errorf("empty command before semicolon")
+			}
+			segments = append(segments, current)
+			operators = append(operators, ChainOpSequence)
+			current = nil
+
+		case TokenAnd:
+			if len(current) == 0 {
+				return nil, nil, fmt.Errorf("empty command before &&")
+			}
+			segments = append(segments, current)
+			operators = append(operators, ChainOpAnd)
+			current = nil
+
+		case TokenOr:
+			if len(current) == 0 {
+				return nil, nil, fmt.Errorf("empty command before ||")
+			}
+			segments = append(segments, current)
+			operators = append(operators, ChainOpOr)
+			current = nil
+
+		default:
+			current = append(current, token)
+		}
+	}
+
+	// Add final segment
+	if len(current) == 0 {
+		return nil, nil, fmt.Errorf("empty command at end of chain")
+	}
+	segments = append(segments, current)
+
+	return segments, operators, nil
+}

@@ -155,3 +155,43 @@ func (e *Executor) executeStage(ctx context.Context, stage *PipelineStage, execC
 
 	return 0, nil
 }
+
+// ExecuteCommandChain executes a chain with conditional logic
+func (e *Executor) ExecuteCommandChain(ctx context.Context, chain *CommandChain) (int, error) {
+	lastExitCode := 0
+	var lastError error
+
+	for _, segment := range chain.Segments {
+		// Check if we should execute this segment based on previous result
+		shouldRun := e.shouldExecuteSegment(segment.Operator, lastExitCode)
+		if !shouldRun {
+			continue
+		}
+
+		// Execute pipeline
+		lastExitCode, lastError = e.ExecutePipeline(ctx, segment.Pipeline)
+
+		// For last segment, return immediately
+		if segment.Operator == ChainOpNone {
+			return lastExitCode, lastError
+		}
+	}
+
+	return lastExitCode, lastError
+}
+
+// shouldExecuteSegment determines if a segment should run based on the operator and previous exit code
+func (e *Executor) shouldExecuteSegment(op ChainOperator, prevExitCode int) bool {
+	switch op {
+	case ChainOpSequence:
+		return true // Always run after ;
+	case ChainOpAnd:
+		return prevExitCode == 0 // Run after && if previous succeeded
+	case ChainOpOr:
+		return prevExitCode != 0 // Run after || if previous failed
+	case ChainOpNone:
+		return true // First segment always runs
+	default:
+		return true
+	}
+}

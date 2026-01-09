@@ -196,7 +196,7 @@ func (s *FlagSet) parseLongFlag(tokens []Token, i int) (int, error) {
 	return 2, nil
 }
 
-// parseShortFlag parses a short flag (-f or -f value)
+// parseShortFlag parses a short flag (-f or -f value or combined -abc)
 func (s *FlagSet) parseShortFlag(tokens []Token, i int) (int, error) {
 	word := tokens[i].Value
 	name := strings.TrimPrefix(word, "-")
@@ -218,7 +218,49 @@ func (s *FlagSet) parseShortFlag(tokens []Token, i int) (int, error) {
 		return 1, nil
 	}
 
-	// Check if flag exists
+	// Handle combined short flags (e.g., -alh)
+	if len(name) > 1 {
+		// Process each character as a separate flag
+		for j, char := range name {
+			charStr := string(char)
+			flag, ok := s.findFlagByShort(charStr)
+			if !ok {
+				return 0, fmt.Errorf("unknown flag: -%s", charStr)
+			}
+
+			// All flags in a combined sequence must be boolean, except possibly the last
+			if flag.Type != "bool" {
+				// If it's not the last flag, it's an error
+				if j < len(name)-1 {
+					return 0, fmt.Errorf("non-boolean flag -%s cannot be combined with other flags", charStr)
+				}
+
+				// Last flag requires a value
+				if i+1 >= len(tokens) {
+					return 0, fmt.Errorf("flag -%s requires a value", charStr)
+				}
+
+				nextToken := tokens[i+1]
+				if nextToken.Type != TokenWord {
+					return 0, fmt.Errorf("flag -%s requires a value", charStr)
+				}
+
+				if err := s.parseValue(flag, nextToken.Value); err != nil {
+					return 0, fmt.Errorf("invalid value for flag -%s: %w", charStr, err)
+				}
+
+				return 2, nil
+			}
+
+			// Set boolean flag
+			flag.Value = true
+			flag.Changed = true
+		}
+
+		return 1, nil
+	}
+
+	// Single short flag
 	flag, ok := s.findFlagByShort(name)
 	if !ok {
 		return 0, fmt.Errorf("unknown flag: -%s", name)

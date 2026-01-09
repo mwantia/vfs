@@ -19,17 +19,24 @@ func RegisterBuiltins(root *cmd.Command) error {
 		cpCmd(),
 		mvCmd(),
 
-		// Directory commands
-		lsCmd(),
+		// ls -alh [path]
+		newListDirectoryCommand(),
+		// mkdir [path]
 		mkdirCmd(),
+		// rmdir [path]
 		rmdirCmd(),
+		// cd [path]
 		cdCmd(),
 		pwdCmd(),
+		walkCmd(),
 
 		// Utility commands
 		helpCmd(),
 		echoCmd(),
 		statCmd(),
+
+		// Script execution
+		sourceCmd(),
 	}
 
 	for _, c := range commands {

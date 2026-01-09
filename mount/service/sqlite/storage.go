@@ -281,7 +281,7 @@ func (s *SqliteObjectStorageService) DeleteObject(ctx context.Context, key strin
 	}
 
 	// Delete the object itself
-	return s.deleteObjectInternal(ctx,key)
+	return s.deleteObjectInternal(ctx, key)
 }
 
 // deleteObjectInternal deletes a single object without recursive checks
