@@ -209,12 +209,6 @@ func (s *ConsulObjectStorageService) DeleteObject(ctx context.Context, key strin
 	isExplicitDir := dirPair != nil
 
 	if hasChildren || isExplicitDir {
-		// It's a directory (explicit or virtual)
-		if !force {
-			// Non-recursive delete requires force=true
-			return data.ErrIsDirectory
-		}
-
 		// Delete all children recursively using DeleteTree
 		if _, err := s.driver.kv.DeleteTree(dirKey, nil); err != nil {
 			return err

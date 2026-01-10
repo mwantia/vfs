@@ -2,8 +2,10 @@ package builtin
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mwantia/vfs/cmd"
+	"github.com/mwantia/vfs/mount"
 	"github.com/mwantia/vfs/mount/builder"
 )
 
@@ -14,15 +16,15 @@ func mountCmd() *cmd.Command {
 		Long:  "Mount a filesystem at the specified path using the given URI",
 		Args:  cmd.ExactArgsValidator(2),
 		Run: func(vfs cmd.API, c *cmd.Command, args []string) error {
-			uri := args[0]
-			path := args[1]
+			path := strings.TrimSpace(args[0])
+			uri := strings.TrimSpace(args[1])
 
 			ctx := vfs.GetContext().GetContext()
 			execCtx := vfs.GetExecutionContext()
 
-			// Build mount steps
-			steps := []builder.MountStep{
-				builder.WithObjectStorage(uri),
+			steps, err := mount.IdentifyMountSteps(ctx, uri)
+			if err != nil {
+				return err
 			}
 
 			// Check for metadata flag

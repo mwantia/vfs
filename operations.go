@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/errors"
 	"github.com/mwantia/vfs/mount"
@@ -24,7 +23,8 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.OpenFile(traversal.WithAbsolute(ctx, path), flags)
+	relativePath := strings.TrimPrefix(path, "/")
+	return root.OpenFile(ctx, relativePath, flags)
 }
 
 // CloseFile closes an open file handle at the given path.
@@ -41,7 +41,8 @@ func (vfs *virtualFileSystemImpl) CloseFile(ctx context.Context, path string, fo
 	}
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
-	return root.CloseFile(traversal.WithAbsolute(ctx, path), force)
+	relativePath := strings.TrimPrefix(path, "/")
+	return root.CloseFile(ctx, relativePath, force)
 }
 
 // Read reads size bytes from the file at path starting at offset.

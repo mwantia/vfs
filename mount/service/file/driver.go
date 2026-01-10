@@ -1,4 +1,4 @@
-package direct
+package file
 
 import (
 	"context"
@@ -12,22 +12,22 @@ import (
 	"github.com/mwantia/vfs/mount/service"
 )
 
-// NewDirectDriver creates a new Direct driver
-func NewDirectDriver(uri *service.Uri) (*DirectDriver, error) {
-	cfg := parseDirectBackendConfig(uri)
+// NewFileDriver creates a new File driver
+func NewFileDriver(uri *service.Uri) (*FileDriver, error) {
+	cfg := parseFileBackendConfig(uri)
 
-	return &DirectDriver{
+	return &FileDriver{
 		path: cfg.Path,
 	}, nil
 }
 
 // Name returns the driver name
-func (*DirectDriver) Name() string {
+func (*FileDriver) Name() string {
 	return DriverName
 }
 
 // Health returns the health status of the driver by verifying the root directory is accessible
-func (d *DirectDriver) Health() (bool, error) {
+func (d *FileDriver) Health() (bool, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -45,7 +45,7 @@ func (d *DirectDriver) Health() (bool, error) {
 }
 
 // IsBusy checks if the driver is currently busy with operations
-func (d *DirectDriver) IsBusy() bool {
+func (d *FileDriver) IsBusy() bool {
 	// Try to acquire the lock - if we can't immediately, the driver is busy
 	if !d.mu.TryLock() {
 		return true
@@ -56,10 +56,11 @@ func (d *DirectDriver) IsBusy() bool {
 }
 
 // GetCapabilities returns the capabilities supported by this driver
-func (*DirectDriver) GetCapabilities() *service.DriverCapabilities {
+func (*FileDriver) GetCapabilities() *service.DriverCapabilities {
 	return &service.DriverCapabilities{
 		Type: DriverType,
 		ObjectStorage: service.ObjectStorageCapabilities{
+			BufferSize: 5 * 1024 * 1024, // 5 MB
 			Operations: []service.ObjectStorageOperation{
 				service.ObjectStorageOperationCreate,
 				service.ObjectStorageOperationRead,
@@ -82,7 +83,7 @@ func (*DirectDriver) GetCapabilities() *service.DriverCapabilities {
 }
 
 // OpenDriver initializes the driver and verifies the root directory
-func (d *DirectDriver) OpenDriver(ctx context.Context) error {
+func (d *FileDriver) OpenDriver(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -107,30 +108,30 @@ func (d *DirectDriver) OpenDriver(ctx context.Context) error {
 }
 
 // CloseDriver cleans up resources (no-op for filesystem driver)
-func (d *DirectDriver) CloseDriver(ctx context.Context) error {
+func (d *FileDriver) CloseDriver(ctx context.Context) error {
 	// No cleanup needed - OS manages filesystem
 	return nil
 }
 
 // GetObjectStorageService returns the ObjectStorage service
-func (d *DirectDriver) GetObjectStorageService() service.ObjectStorageService {
-	return &DirectObjectStorageService{
+func (d *FileDriver) GetObjectStorageService() service.ObjectStorageService {
+	return &FileObjectStorageService{
 		driver: d,
 	}
 }
 
 // GetMetadataService returns nil (Direct driver does not provide metadata service)
-func (d *DirectDriver) GetMetadataService() service.MetadataService {
+func (d *FileDriver) GetMetadataService() service.MetadataService {
 	return nil
 }
 
 // GetExtensionService returns nil (Direct driver does not support extensions)
-func (d *DirectDriver) GetExtensionService(ext service.ServiceExtension) service.Service {
+func (d *FileDriver) GetExtensionService(ext service.ServiceExtension) service.Service {
 	return nil
 }
 
 // parseDirectBackendConfig parses URI into Direct configuration
-func parseDirectBackendConfig(uri *service.Uri) *DirectBackendConfig {
+func parseFileBackendConfig(uri *service.Uri) *FileBackendConfig {
 	path := uri.Path
 
 	// Handle Windows drive letters in host (file://C:/path → C:/path)
@@ -141,7 +142,7 @@ func parseDirectBackendConfig(uri *service.Uri) *DirectBackendConfig {
 	// Clean and normalize the path
 	path = filepath.Clean(path)
 
-	return &DirectBackendConfig{
+	return &FileBackendConfig{
 		Path: path,
 	}
 }

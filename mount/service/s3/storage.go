@@ -234,11 +234,6 @@ func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, key string, f
 				return data.ErrNotExist
 			}
 
-			// It's an implicit directory
-			if !force {
-				return data.ErrIsDirectory
-			}
-
 			// Force delete all children (recursive)
 			childObjects := s.driver.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{
 				Prefix:    prefix,
@@ -263,10 +258,6 @@ func (s *S3ObjectStorageService) DeleteObject(ctx context.Context, key string, f
 
 	// Check if it's a directory (explicit marker with trailing /)
 	if strings.HasSuffix(objInfo.Key, "/") {
-		if !force {
-			return data.ErrIsDirectory
-		}
-
 		// Delete directory marker and all children
 		prefix := named + "/"
 		objects := s.driver.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{

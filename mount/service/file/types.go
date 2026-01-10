@@ -1,4 +1,4 @@
-package direct
+package file
 
 import (
 	"sync"
@@ -11,21 +11,21 @@ var (
 	DriverType = service.ServiceTypeObjectStorage
 )
 
-// DirectDriver implements an ObjectStorage-only driver that provides
+// FileDriver implements an ObjectStorage-only driver that provides
 // direct access to the operating system's filesystem
-type DirectDriver struct {
+type FileDriver struct {
 	mu sync.RWMutex
 
 	// Root directory path
 	path string
 }
 
-// DirectObjectStorageService implements ObjectStorageService
-type DirectObjectStorageService struct {
-	driver *DirectDriver
+// FileObjectStorageService implements ObjectStorageService
+type FileObjectStorageService struct {
+	driver *FileDriver
 }
 
-// DirectBackendConfig holds configuration for the Direct backend
-type DirectBackendConfig struct {
+// FileBackendConfig holds configuration for the File backend
+type FileBackendConfig struct {
 	Path string // Root directory path
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/errors"
 	"github.com/mwantia/vfs/mount/extensions/notification"
@@ -14,10 +13,16 @@ import (
 
 // OpenFile opens a file with the specified access mode flags and returns a file handle.
 // The returned VirtualFile must be closed by the caller. Use flags to control access.
-func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.AccessMode) (MountStreamer, error) {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.OpenFile(mountTraversal, flags)
+func (m *Mount) OpenFile(ctx context.Context, path string, flags data.AccessMode) (MountStreamer, error) {
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		// Delegate to child mount, but don't return immediately
+		streamer, err := mount.OpenFile(ctx, relativePath, flags)
+		if err != nil {
+			return nil, err
+		}
+
+		return streamer, nil
 	}
 	// Throw if mountpoint is marked as readonly
 	if m.Options.IsReadOnly {
@@ -30,13 +35,11 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	key := traversal.RelativePath()
-
 	// Check path constraints
-	if err := m.validatePathLength(key); err != nil {
+	if err := m.validatePathLength(path); err != nil {
 		return nil, err
 	}
-	if err := m.validatePathDepth(key); err != nil {
+	if err := m.validatePathDepth(path); err != nil {
 		return nil, err
 	}
 
@@ -49,8 +52,8 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 	// Check if file exists when not creating
 	if flags&data.AccessModeCreate == 0 {
 		// Check if object exists (apply PathPrefix for ObjectStorage)
-		prefixedKey := m.addObjectStoragePathPrefix(key)
-		stat, err := m.ObjectStorage.HeadObject(traversal, prefixedKey)
+		prefixedKey := m.addObjectStoragePathPrefix(path)
+		stat, err := m.ObjectStorage.HeadObject(ctx, prefixedKey)
 		if err != nil {
 			return nil, err
 		}
@@ -65,8 +68,8 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 	// Handle file creation
 	if flags&data.AccessModeCreate != 0 {
 		// Create the file - use 0644 as default mode for regular files (apply PathPrefix)
-		prefixedKey := m.addObjectStoragePathPrefix(key)
-		stat, err := m.ObjectStorage.CreateObject(traversal, prefixedKey, 0644)
+		prefixedKey := m.addObjectStoragePathPrefix(path)
+		stat, err := m.ObjectStorage.CreateObject(ctx, prefixedKey, 0644)
 		if err != nil && err != data.ErrExist {
 			return nil, err
 		}
@@ -81,7 +84,7 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 			// Sync to MetadataService if available (only if newly created)
 			if m.Metadata != nil {
 				meta := stat.ToMetadata()
-				if syncErr := m.Metadata.CreateMeta(traversal, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
+				if syncErr := m.Metadata.CreateMeta(ctx, m.Options.Namespace, meta); syncErr != nil && syncErr != data.ErrExist {
 					// TODO :: Missing internal log for tracking internal errors
 					fmt.Printf("WARNING: Failed to sync file creation to MetadataService: %v\n", syncErr)
 				}
@@ -91,8 +94,8 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 
 	// Handle truncation
 	if flags&data.AccessModeTrunc != 0 {
-		prefixedKey := m.addObjectStoragePathPrefix(key)
-		if err := m.ObjectStorage.TruncateObject(traversal, prefixedKey, 0); err != nil {
+		prefixedKey := m.addObjectStoragePathPrefix(path)
+		if err := m.ObjectStorage.TruncateObject(ctx, prefixedKey, 0); err != nil {
 			return nil, err
 		}
 
@@ -104,7 +107,7 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 					Size: 0,
 				},
 			}
-			if updateErr := m.Metadata.UpdateMeta(traversal, m.Options.Namespace, key, update); updateErr != nil && updateErr != data.ErrNotExist {
+			if updateErr := m.Metadata.UpdateMeta(ctx, m.Options.Namespace, path, update); updateErr != nil && updateErr != data.ErrNotExist {
 				// TODO :: Missing internal log for tracking internal errors
 				fmt.Printf("WARNING: Failed to sync truncate to metadata service: %v\n", updateErr)
 			}
@@ -115,8 +118,8 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 	offset := int64(0)
 	if flags&data.AccessModeAppend != 0 {
 		// Get file size for append (apply PathPrefix)
-		prefixedKey := m.addObjectStoragePathPrefix(key)
-		stat, err := m.ObjectStorage.HeadObject(traversal, prefixedKey)
+		prefixedKey := m.addObjectStoragePathPrefix(path)
+		stat, err := m.ObjectStorage.HeadObject(ctx, prefixedKey)
 		if err != nil {
 			return nil, err
 		}
@@ -125,27 +128,31 @@ func (m *Mount) OpenFile(traversal traversal.TraversalContext, flags data.Access
 		offset = stat.Size
 	}
 
-	if ok, err := m.emitNotificationEvent(traversal, notification.NotificationTypeFileOpened, key, false, 0); ok && err != nil {
+	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeFileOpened, path, false, 0); ok && err != nil {
 		return nil, err
 	}
 
-	return newTraversalMountStreamer(traversal, m, offset, flags), nil
+	return newMountStreamer(ctx, m, &mountStreamerOptions{
+		path:       path,
+		offset:     offset,
+		flags:      flags,
+		bufferSize: caps.ObjectStorage.BufferSize,
+	}), nil
 }
 
 // CloseFile closes an open file handle at the given path.
 // This may be a no-op for implementations that don't maintain file handles.
-func (m *Mount) CloseFile(traversal traversal.TraversalContext, force bool) error {
-	//
-	if match, mount, mountTraversal := m.resolve(traversal); match {
-		return mount.CloseFile(mountTraversal, force)
+func (m *Mount) CloseFile(ctx context.Context, path string, force bool) error {
+	// Check if child mount exists for this path
+	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
+		// Delegate to child mount, but don't return immediately
+		return mount.CloseFile(ctx, relativePath, force)
 	}
 	// Only lock after checks for traversing submounts is done.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	relativePath := traversal.RelativePath()
-
-	if ok, err := m.emitNotificationEvent(traversal, notification.NotificationTypeFileClosed, relativePath, false, 0); ok && err != nil {
+	if ok, err := m.emitNotificationEvent(ctx, notification.NotificationTypeFileClosed, path, false, 0); ok && err != nil {
 		return err
 	}
 

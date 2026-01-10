@@ -3,6 +3,7 @@ package builtin
 import (
 	"fmt"
 	pathpkg "path"
+	"path/filepath"
 	"strings"
 
 	"github.com/mwantia/vfs/cmd"
@@ -30,7 +31,7 @@ func newListDirectoryCommand() *cmd.Command {
 
 			entries, err := vfs.ReadDirectory(ctx.GetContext(), path)
 			if err != nil {
-				fmt.Fprintf(exec.Stderr, "ls: %s: %v\n", path, err)
+				return fmt.Errorf("ls: %s: %v", path, err)
 			}
 
 			all, _ := cmd.Flags().GetBool("all")
@@ -43,9 +44,11 @@ func newListDirectoryCommand() *cmd.Command {
 					if longFormat {
 						size := formatSize(entry.Size, humanReadable)
 						time := entry.ModifyTime.Format("Jan 02 15:04")
-						fmt.Fprintf(exec.Stdout, "%s %8s %s %s\n", entry.Mode, size, time, entry.Key)
+						name := filepath.Base(entry.Key)
+
+						exec.PrintOutput("%s %8s %s %s\n", entry.Mode, size, time, name)
 					} else {
-						fmt.Fprintf(exec.Stdout, "%s\n", entry.Key)
+						exec.PrintOutput("%s\n", entry.Key)
 					}
 				}
 			}

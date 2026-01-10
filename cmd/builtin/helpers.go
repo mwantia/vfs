@@ -24,3 +24,17 @@ func formatSize(bytes int64, humanReadable bool) string {
 		return fmt.Sprintf("%10d B", bytes)
 	}
 }
+
+// getFileType returns a human-readable file type
+func getFileType(mode interface {
+	IsDir() bool
+	IsRegular() bool
+}) string {
+	if mode.IsDir() {
+		return "directory"
+	}
+	if mode.IsRegular() {
+		return "regular file"
+	}
+	return "other"
+}

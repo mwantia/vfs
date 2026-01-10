@@ -29,33 +29,6 @@ func mkdirCmd() *cmd.Command {
 	}
 }
 
-func rmdirCmd() *cmd.Command {
-	c := &cmd.Command{
-		Use:   "rmdir <directory>",
-		Short: "Remove a directory",
-		Long:  "Remove an empty directory",
-		Args:  cmd.ExactArgsValidator(1),
-		Run: func(vfs cmd.API, c *cmd.Command, args []string) error {
-			ctx := vfs.GetContext().GetContext()
-			execCtx := vfs.GetExecutionContext()
-			path := args[0]
-
-			// Check for force flag
-			force, _ := c.Flags().GetBool("force")
-
-			if err := vfs.RemoveDirectory(ctx, path, force); err != nil {
-				fmt.Fprintf(execCtx.Stderr, "rmdir: %s: %v\n", path, err)
-				return err
-			}
-
-			return nil
-		},
-	}
-
-	c.Flags().Bool("force", "f", false, "Force removal (recursive)")
-	return c
-}
-
 func cdCmd() *cmd.Command {
 	return &cmd.Command{
 		Use:   "cd <directory>",
@@ -86,20 +59,6 @@ func cdCmd() *cmd.Command {
 
 			// Update current directory
 			vfs.GetContext().SetCurrentDirectory(path)
-			return nil
-		},
-	}
-}
-
-func pwdCmd() *cmd.Command {
-	return &cmd.Command{
-		Use:   "pwd",
-		Short: "Print working directory",
-		Long:  "Print the current working directory",
-		Args:  cmd.NoArgsValidator{},
-		Run: func(vfs cmd.API, c *cmd.Command, args []string) error {
-			execCtx := vfs.GetExecutionContext()
-			fmt.Fprintf(execCtx.Stdout, "%s\n", vfs.GetContext().GetCurrentDirectory())
 			return nil
 		},
 	}

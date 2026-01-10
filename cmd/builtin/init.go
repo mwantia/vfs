@@ -15,28 +15,32 @@ func RegisterBuiltins(root *cmd.Command) error {
 		catCmd(),
 		teeCmd(),
 		touchCmd(),
-		rmCmd(),
 		cpCmd(),
 		mvCmd(),
 
-		// ls -alh [path]
-		newListDirectoryCommand(),
 		// mkdir [path]
 		mkdirCmd(),
-		// rmdir [path]
-		rmdirCmd(),
 		// cd [path]
 		cdCmd(),
-		pwdCmd(),
 		walkCmd(),
 
 		// Utility commands
-		helpCmd(),
-		echoCmd(),
 		statCmd(),
 
-		// Script execution
-		sourceCmd(),
+		// help [command]
+		newHelpCommand(),
+		// printf [text]...
+		newPrintfCommand(),
+		// echo [text]...
+		newEchoCommand(),
+		// pwd
+		newPrintWorkingDirectoryCommand(),
+		// rm -rf <path>...
+		newRemoveCommand(),
+		// ls -alh [path]
+		newListDirectoryCommand(),
+		// source -cv <path>
+		newSourceCommand(),
 	}
 
 	for _, c := range commands {

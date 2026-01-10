@@ -1,4 +1,4 @@
-package direct
+package file
 
 import (
 	"context"
@@ -13,12 +13,12 @@ import (
 )
 
 // GetLifecycle returns the driver's lifecycle interface
-func (s *DirectObjectStorageService) GetLifecycle() service.Lifecycle {
+func (s *FileObjectStorageService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
 // CreateObject creates a new file or directory in the filesystem
-func (s *DirectObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
+func (s *FileObjectStorageService) CreateObject(ctx context.Context, key string, mode data.FileMode) (data.FileStat, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -52,7 +52,7 @@ func (s *DirectObjectStorageService) CreateObject(ctx context.Context, key strin
 }
 
 // ReadObject reads data from a file at the specified offset
-func (s *DirectObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (s *FileObjectStorageService) ReadObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -85,7 +85,7 @@ func (s *DirectObjectStorageService) ReadObject(ctx context.Context, key string,
 }
 
 // WriteObject writes data to a file at the specified offset
-func (s *DirectObjectStorageService) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
+func (s *FileObjectStorageService) WriteObject(ctx context.Context, key string, offset int64, dat []byte) (int, error) {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -113,7 +113,7 @@ func (s *DirectObjectStorageService) WriteObject(ctx context.Context, key string
 }
 
 // DeleteObject deletes a file or directory
-func (s *DirectObjectStorageService) DeleteObject(ctx context.Context, key string, force bool) error {
+func (s *FileObjectStorageService) DeleteObject(ctx context.Context, key string, force bool) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -128,10 +128,6 @@ func (s *DirectObjectStorageService) DeleteObject(ctx context.Context, key strin
 	}
 
 	if info.IsDir() {
-		// Directories ALWAYS require force=true (v2 convention)
-		if !force {
-			return data.ErrIsDirectory
-		}
 		return os.RemoveAll(fullPath)
 	}
 
@@ -139,7 +135,7 @@ func (s *DirectObjectStorageService) DeleteObject(ctx context.Context, key strin
 }
 
 // ListObjects lists directory contents or returns info for a single file
-func (s *DirectObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
+func (s *FileObjectStorageService) ListObjects(ctx context.Context, key string) ([]data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -188,7 +184,7 @@ func (s *DirectObjectStorageService) ListObjects(ctx context.Context, key string
 }
 
 // HeadObject returns metadata for a file or directory
-func (s *DirectObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
+func (s *FileObjectStorageService) HeadObject(ctx context.Context, key string) (data.FileStat, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
@@ -210,7 +206,7 @@ func (s *DirectObjectStorageService) HeadObject(ctx context.Context, key string)
 }
 
 // TruncateObject resizes a file to the specified size
-func (s *DirectObjectStorageService) TruncateObject(ctx context.Context, key string, size int64) error {
+func (s *FileObjectStorageService) TruncateObject(ctx context.Context, key string, size int64) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -219,13 +215,13 @@ func (s *DirectObjectStorageService) TruncateObject(ctx context.Context, key str
 }
 
 // resolvePath joins the driver root with the relative key
-func (d *DirectDriver) resolvePath(key string) string {
+func (d *FileDriver) resolvePath(key string) string {
 	// key comes WITHOUT leading slash from TraversalContext.RelativePath()
 	return filepath.Join(d.path, filepath.Clean(key))
 }
 
 // toFileStat converts os.FileInfo to data.FileStat
-func (d *DirectDriver) toFileStat(key string, info os.FileInfo) data.FileStat {
+func (d *FileDriver) toFileStat(key string, info os.FileInfo) data.FileStat {
 	// Convert os.FileMode to data.FileMode
 	virtMode := data.FileMode(info.Mode().Perm())
 	if info.IsDir() {

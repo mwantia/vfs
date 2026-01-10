@@ -161,11 +161,6 @@ func (eos *EphemeralObjectStorageService) DeleteObject(ctx context.Context, key 
 	}
 
 	if stat.Mode.IsDir() {
-		// Directories REQUIRE force=true to delete (even if empty)
-		if !force {
-			return data.ErrIsDirectory
-		}
-
 		// Force delete - collect and delete all children
 		prefix := named
 		if key != "" {

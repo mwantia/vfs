@@ -262,11 +262,6 @@ func (s *PostgresObjectStorageService) DeleteObject(ctx context.Context, key str
 
 	// If it's a directory, handle recursive deletion
 	if mode.IsDir() {
-		// Directories ALWAYS require force=true (even if empty)
-		if !force {
-			return data.ErrIsDirectory
-		}
-
 		// Collect all children for recursive deletion using SQL query
 		pattern := key + "/%"
 		rows, err := conn.Query(ctx,

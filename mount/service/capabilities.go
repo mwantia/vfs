@@ -56,6 +56,7 @@ type ObjectStorageConstraints struct {
 }
 
 type ObjectStorageCapabilities struct {
+	BufferSize  int64                     `json:"buffer_size"`
 	Operations  []ObjectStorageOperation  `json:"operations"`
 	AccessModes []ObjectStorageAccessMode `json:"access_modes"`
 	Constraints ObjectStorageConstraints  `json:"constraints"`

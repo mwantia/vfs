@@ -61,6 +61,7 @@ func (*S3ObjectStorageDriver) GetCapabilities() *service.DriverCapabilities {
 	return &service.DriverCapabilities{
 		Type: service.ServiceTypeObjectStorage,
 		ObjectStorage: service.ObjectStorageCapabilities{
+			BufferSize: 5 * 1024 * 1024, // 5 MB
 			Operations: []service.ObjectStorageOperation{
 				service.ObjectStorageOperationCreate,
 				service.ObjectStorageOperationRead,

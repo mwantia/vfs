@@ -144,12 +144,12 @@ func TestAllMounts_DirectoryOperations(t *testing.T) {
 				tst.Errorf("Expected 3 entries, got %d", len(entries))
 			}
 
-			if err := fs.RemoveDirectory(ctx, "/data", false); err == nil {
-				tst.Error("Expected error removing non-empty directory")
+			if err := fs.RemoveDirectory(ctx, "/data", false); err != nil {
+				tst.Errorf("RemoveDirectory failed: %v", err)
 			}
 
-			if _, err := fs.StatMetadata(ctx, "/data"); err != nil {
-				tst.Errorf("Directory should still exist, got %v", err)
+			if _, err := fs.StatMetadata(ctx, "/data"); err == nil {
+				tst.Error("Error expected. Directory shouldn't exist")
 			}
 		})
 	}
@@ -243,8 +243,8 @@ func TestAllMounts_ErrorCases(t *testing.T) {
 				tst.Error("Expected error opening directory for reading")
 			}
 
-			if err := fs.UnlinkFile(ctx, "/testdir"); err == nil {
-				tst.Error("Expected error unlinking directory")
+			if err := fs.UnlinkFile(ctx, "/testdir"); err != nil {
+				tst.Errorf("UnlinkFile failed: %v", err)
 			}
 		})
 	}

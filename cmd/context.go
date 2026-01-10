@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -163,4 +164,14 @@ func (e *ExecutionContext) Clone() *ExecutionContext {
 		Stdout: e.Stdout,
 		Stderr: e.Stderr,
 	}
+}
+
+func (e *ExecutionContext) PrintOutput(format string, a ...any) error {
+	_, err := fmt.Fprintf(e.Stdout, format, a...)
+	return err
+}
+
+func (e *ExecutionContext) PrintError(format string, a ...any) error {
+	_, err := fmt.Fprintf(e.Stderr, format, a...)
+	return err
 }

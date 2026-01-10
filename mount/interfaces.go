@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 
-	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/builder"
 )
@@ -34,6 +33,14 @@ type MountPoint interface {
 
 	// Restore
 	Restore(ctx context.Context) error
+
+	// OpenFile opens a file with the specified access mode flags and returns a file handle.
+	// The returned VirtualFile must be closed by the caller. Use flags to control access.
+	OpenFile(ctx context.Context, path string, flags data.AccessMode) (MountStreamer, error)
+
+	// CloseFile closes an open file handle at the given path.
+	// This may be a no-op for implementations that don't maintain file handles.
+	CloseFile(ctx context.Context, path string, force bool) error
 
 	// Read reads size bytes from the file at path starting at offset.
 	// Returns the data read or an error if the operation fails.
@@ -72,14 +79,6 @@ type MountPoint interface {
 	// This implementation uses a copy-and-delete strategy which works across different mounts
 	// but is not atomic and may not be optimal for large files.
 	Rename(ctx context.Context, sourcePath, targetPath string) error
-
-	// OpenFile opens a file with the specified access mode flags and returns a file handle.
-	// The returned VirtualFile must be closed by the caller. Use flags to control access.
-	OpenFile(traversal traversal.TraversalContext, flags data.AccessMode) (MountStreamer, error)
-
-	// CloseFile closes an open file handle at the given path.
-	// This may be a no-op for implementations that don't maintain file handles.
-	CloseFile(traversal traversal.TraversalContext, force bool) error
 }
 
 // Streamer combines all operation interfaces for data-streaming.
@@ -90,6 +89,9 @@ type MountStreamer interface {
 	io.Writer
 	io.Seeker
 	io.Closer
+
+	io.ReaderFrom
+	io.WriterTo
 
 	// IsBusy tries to return the current state of the stream.
 	// It should be used to determine, if it's safe to close a stream.

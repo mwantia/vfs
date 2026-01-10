@@ -2,73 +2,12 @@ package builtin
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/mwantia/vfs/cmd"
 )
 
-func echoCmd() *cmd.Command {
-	return &cmd.Command{
-		Use:   "echo [text...]",
-		Short: "Print text to stdout",
-		Long:  "Print the specified text to stdout",
-		Args:  cmd.ArbitraryArgsValidator{},
-		Run: func(vfs cmd.API, c *cmd.Command, args []string) error {
-			execCtx := vfs.GetExecutionContext()
-			fmt.Fprintf(execCtx.Stdout, "%s\n", strings.Join(args, " "))
-			return nil
-		},
-	}
-}
-
-func statCmd() *cmd.Command {
-	return &cmd.Command{
-		Use:   "stat <path>",
-		Short: "Display file metadata",
-		Long:  "Display detailed metadata for the specified file or directory",
-		Args:  cmd.ExactArgsValidator(1),
-		Run: func(vfs cmd.API, c *cmd.Command, args []string) error {
-			ctx := vfs.GetContext().GetContext()
-			execCtx := vfs.GetExecutionContext()
-			path := args[0]
-
-			stat, err := vfs.StatMetadata(ctx, path)
-			if err != nil {
-				fmt.Fprintf(execCtx.Stderr, "stat: %s: %v\n", path, err)
-				return err
-			}
-
-			fmt.Fprintf(execCtx.Stdout, "  File: %s\n", stat.Key)
-			fmt.Fprintf(execCtx.Stdout, "  Size: %d\n", stat.Size)
-			fmt.Fprintf(execCtx.Stdout, "  Mode: %s\n", stat.Mode)
-			fmt.Fprintf(execCtx.Stdout, "  Type: %s\n", getFileType(stat.Mode))
-			if !stat.CreateTime.IsZero() {
-				fmt.Fprintf(execCtx.Stdout, "Create: %s\n", stat.CreateTime.Format("2006-01-02 15:04:05"))
-			}
-			if !stat.ModifyTime.IsZero() {
-				fmt.Fprintf(execCtx.Stdout, "Modify: %s\n", stat.ModifyTime.Format("2006-01-02 15:04:05"))
-			}
-			if !stat.AccessTime.IsZero() {
-				fmt.Fprintf(execCtx.Stdout, "Access: %s\n", stat.AccessTime.Format("2006-01-02 15:04:05"))
-			}
-			if stat.UID != 0 || stat.GID != 0 {
-				fmt.Fprintf(execCtx.Stdout, "   UID: %d\n", stat.UID)
-				fmt.Fprintf(execCtx.Stdout, "   GID: %d\n", stat.GID)
-			}
-			if stat.ContentType != "" {
-				fmt.Fprintf(execCtx.Stdout, "  Type: %s\n", stat.ContentType)
-			}
-			if stat.ETag != "" {
-				fmt.Fprintf(execCtx.Stdout, "  ETag: %s\n", stat.ETag)
-			}
-
-			return nil
-		},
-	}
-}
-
-func helpCmd() *cmd.Command {
-	return &cmd.Command{
+func newHelpCommand() *cmd.Command {
+	cmd := &cmd.Command{
 		Use:   "help [command]",
 		Short: "Display help for commands",
 		Long:  "Display help information for the specified command or list all available commands",
@@ -131,18 +70,6 @@ func helpCmd() *cmd.Command {
 			return nil
 		},
 	}
-}
 
-// getFileType returns a human-readable file type
-func getFileType(mode interface {
-	IsDir() bool
-	IsRegular() bool
-}) string {
-	if mode.IsDir() {
-		return "directory"
-	}
-	if mode.IsRegular() {
-		return "regular file"
-	}
-	return "other"
+	return cmd
 }
