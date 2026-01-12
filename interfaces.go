@@ -40,7 +40,7 @@ type VirtualFileSystem interface {
 
 	// OpenFile opens a file with the specified access mode flags and returns a file handle.
 	// The returned VirtualFile must be closed by the caller. Use flags to control access.
-	OpenFile(ctx context.Context, path string, flags data.AccessMode) (mount.MountStreamer, error)
+	OpenFile(ctx context.Context, path string, flags data.AccessMode, opts ...mount.MountStreamerOption) (mount.Streamer, error)
 
 	// CloseFile closes an open file handle at the given path.
 	// This may be a no-op for implementations that don't maintain file handles.

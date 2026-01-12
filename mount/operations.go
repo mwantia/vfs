@@ -13,11 +13,11 @@ import (
 
 // OpenFile opens a file with the specified access mode flags and returns a file handle.
 // The returned VirtualFile must be closed by the caller. Use flags to control access.
-func (m *Mount) OpenFile(ctx context.Context, path string, flags data.AccessMode) (MountStreamer, error) {
+func (m *Mount) OpenFile(ctx context.Context, path string, flags data.AccessMode, opts ...MountStreamerOption) (Streamer, error) {
 	// Check if child mount exists for this path
 	if mount, relativePath := m.resolveMountPoint(path); path != relativePath {
 		// Delegate to child mount, but don't return immediately
-		streamer, err := mount.OpenFile(ctx, relativePath, flags)
+		streamer, err := mount.OpenFile(ctx, relativePath, flags, opts...)
 		if err != nil {
 			return nil, err
 		}
@@ -132,12 +132,20 @@ func (m *Mount) OpenFile(ctx context.Context, path string, flags data.AccessMode
 		return nil, err
 	}
 
-	return newMountStreamer(ctx, m, &mountStreamerOptions{
-		path:       path,
-		offset:     offset,
-		flags:      flags,
-		bufferSize: caps.ObjectStorage.BufferSize,
-	}), nil
+	options := &MountStreamerOptions{
+		Path:       path,
+		Offset:     offset,
+		Flags:      flags,
+		BufferSize: caps.ObjectStorage.BufferSize,
+	}
+
+	for _, opt := range opts {
+		if err := opt(options); err != nil {
+			return nil, fmt.Errorf("failed to configure options: %v", err)
+		}
+	}
+
+	return NewStreamer(ctx, m, options), nil
 }
 
 // CloseFile closes an open file handle at the given path.

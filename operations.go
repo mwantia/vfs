@@ -11,7 +11,7 @@ import (
 
 // OpenFile opens a file with the specified access mode flags and returns a file handle.
 // The returned VirtualFile must be closed by the caller. Use flags to control access.
-func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, flags data.AccessMode) (mount.MountStreamer, error) {
+func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, flags data.AccessMode, opts ...mount.MountStreamerOption) (mount.Streamer, error) {
 	ctx, err := validateContext(ctx)
 	if err != nil {
 		return nil, err
@@ -24,7 +24,7 @@ func (vfs *virtualFileSystemImpl) OpenFile(ctx context.Context, path string, fla
 	/* TODO :: Does it suffice to traverse the request to root and be done,
 	 *         or are there any additional operations we need to do? */
 	relativePath := strings.TrimPrefix(path, "/")
-	return root.OpenFile(ctx, relativePath, flags)
+	return root.OpenFile(ctx, relativePath, flags, opts...)
 }
 
 // CloseFile closes an open file handle at the given path.

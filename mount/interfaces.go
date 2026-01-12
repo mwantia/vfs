@@ -36,7 +36,7 @@ type MountPoint interface {
 
 	// OpenFile opens a file with the specified access mode flags and returns a file handle.
 	// The returned VirtualFile must be closed by the caller. Use flags to control access.
-	OpenFile(ctx context.Context, path string, flags data.AccessMode) (MountStreamer, error)
+	OpenFile(ctx context.Context, path string, flags data.AccessMode, opts ...MountStreamerOption) (Streamer, error)
 
 	// CloseFile closes an open file handle at the given path.
 	// This may be a no-op for implementations that don't maintain file handles.
@@ -84,7 +84,7 @@ type MountPoint interface {
 // Streamer combines all operation interfaces for data-streaming.
 // It provides read, write, seek, and close capabilities.
 // The available operations depend on the access mode flags used when opening.
-type MountStreamer interface {
+type Streamer interface {
 	io.Reader
 	io.Writer
 	io.Seeker

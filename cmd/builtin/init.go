@@ -15,7 +15,6 @@ func RegisterBuiltins(root *cmd.Command) error {
 		catCmd(),
 		teeCmd(),
 		touchCmd(),
-		cpCmd(),
 		mvCmd(),
 
 		// mkdir [path]
@@ -24,9 +23,12 @@ func RegisterBuiltins(root *cmd.Command) error {
 		cdCmd(),
 		walkCmd(),
 
-		// Utility commands
-		statCmd(),
-
+		// stat -j <path>
+		newStatCommand(),
+		// etag -s <path>
+		newETagCommand(),
+		// cp <source> <destination>
+		newCopyCommand(),
 		// help [command]
 		newHelpCommand(),
 		// printf [text]...
