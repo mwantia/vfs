@@ -1,22 +1,22 @@
-package sqlite
+package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/mwantia/vfs/data"
 	"github.com/mwantia/vfs/mount/builder"
 	"github.com/mwantia/vfs/mount/service"
 )
 
-func (s *SqliteMountExtensionService) GetLifecycle() service.Lifecycle {
+func (s *PostgresMountExtensionService) GetLifecycle() service.Lifecycle {
 	return s.driver
 }
 
 // PersistMountSpec persists a mount specification at the specified path.
 // The spec contains all required configuration needed to restore the mount later.
-func (s *SqliteMountExtensionService) PersistMountSpec(ctx context.Context, path string, spec builder.MountSpecifications) error {
+func (s *PostgresMountExtensionService) PersistMountSpec(ctx context.Context, path string, spec builder.MountSpecifications) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
 
@@ -26,27 +26,28 @@ func (s *SqliteMountExtensionService) PersistMountSpec(ctx context.Context, path
 		return err
 	}
 
-	// Insert or replace mount spec in database
-	_, err = s.driver.db.ExecContext(ctx, `
-		INSERT OR REPLACE INTO vfs_mounts (path, spec)
-		VALUES (?, ?)
-	`, path, string(buf))
+	// Insert or update mount spec in database (upsert)
+	_, err = s.driver.pool.Exec(ctx, `
+		INSERT INTO vfs_mounts (path, spec)
+		VALUES ($1, $2)
+		ON CONFLICT (path) DO UPDATE SET spec = $2
+	`, path, buf)
 
 	return err
 }
 
-// RestoreMountSpec retrieves a persistent mount specification for the specificed path.
+// RestoreMountSpec retrieves a persistent mount specification for the specified path.
 // Returns error if no mount spec exists, or the stored configuration is corrupt.
-func (s *SqliteMountExtensionService) RestoreMountSpec(ctx context.Context, path string) (builder.MountSpecifications, error) {
+func (s *PostgresMountExtensionService) RestoreMountSpec(ctx context.Context, path string) (builder.MountSpecifications, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	// Query mount spec from database
-	var scanSpec string
-	err := s.driver.db.QueryRowContext(ctx,
-		"SELECT spec FROM vfs_mounts WHERE path = ?", path).Scan(&scanSpec)
+	var specJSON []byte
+	err := s.driver.pool.QueryRow(ctx,
+		"SELECT spec FROM vfs_mounts WHERE path = $1", path).Scan(&specJSON)
 
-	if err == sql.ErrNoRows {
+	if err == pgx.ErrNoRows {
 		return builder.MountSpecifications{}, data.ErrNotExist
 	}
 	if err != nil {
@@ -55,7 +56,7 @@ func (s *SqliteMountExtensionService) RestoreMountSpec(ctx context.Context, path
 
 	// Deserialize JSON to MountSpec
 	var spec builder.MountSpecifications
-	if err := json.Unmarshal([]byte(scanSpec), &spec); err != nil {
+	if err := json.Unmarshal(specJSON, &spec); err != nil {
 		return builder.MountSpecifications{}, err
 	}
 
@@ -64,7 +65,7 @@ func (s *SqliteMountExtensionService) RestoreMountSpec(ctx context.Context, path
 
 // UpdateMountSpec updates an existing persistent mount specification.
 // The update mask specifies which fields to modify.
-func (s *SqliteMountExtensionService) UpdateMountSpec(ctx context.Context, path string, update builder.MountSpecUpdate) (builder.MountSpecifications, error) {
+func (s *PostgresMountExtensionService) UpdateMountSpec(ctx context.Context, path string, update builder.MountSpecUpdate) (builder.MountSpecifications, error) {
 	// First, restore the existing spec
 	existing, err := s.RestoreMountSpec(ctx, path)
 	if err != nil {
@@ -85,41 +86,44 @@ func (s *SqliteMountExtensionService) UpdateMountSpec(ctx context.Context, path 
 	return existing, nil
 }
 
-// DeleteMount removes a persisted mount specification.
+// DeleteMountSpec removes a persisted mount specification.
 // This is called when unmounting to clean up persistence.
-func (s *SqliteMountExtensionService) DeleteMountSpec(ctx context.Context, path string) error {
+func (s *PostgresMountExtensionService) DeleteMountSpec(ctx context.Context, path string) error {
 	s.driver.mu.Lock()
 	defer s.driver.mu.Unlock()
+
 	// Delete mount spec from database
-	_, err := s.driver.db.ExecContext(ctx,
-		"DELETE FROM vfs_mounts WHERE path = ?", path)
+	_, err := s.driver.pool.Exec(ctx,
+		"DELETE FROM vfs_mounts WHERE path = $1", path)
 
 	return err
 }
 
-// ListMounts returns all persisted mount specifications.
+// ListAllMountSpecs returns all persisted mount specifications.
 // The Mount struct uses this to rebuild its fstab on initialization.
-func (s *SqliteMountExtensionService) ListAllMountSpecs(ctx context.Context) (map[string]builder.MountSpecifications, error) {
+func (s *PostgresMountExtensionService) ListAllMountSpecs(ctx context.Context) (map[string]builder.MountSpecifications, error) {
 	s.driver.mu.RLock()
 	defer s.driver.mu.RUnlock()
 
 	// Query all mount specs from database
-	rows, err := s.driver.db.QueryContext(ctx,
+	rows, err := s.driver.pool.Query(ctx,
 		"SELECT path, spec FROM vfs_mounts ORDER BY path")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	// Deserialize each spec
 	specs := make(map[string]builder.MountSpecifications)
 	for rows.Next() {
-		var path, specJSON string
+		var path string
+		var specJSON []byte
 		if err := rows.Scan(&path, &specJSON); err != nil {
 			return nil, err
 		}
 
 		var spec builder.MountSpecifications
-		if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		if err := json.Unmarshal(specJSON, &spec); err != nil {
 			// Skip invalid specs
 			continue
 		}

@@ -7,26 +7,20 @@ import (
 // RegisterBuiltins registers all builtin commands with the root command
 func RegisterBuiltins(root *cmd.Command) error {
 	commands := []*cmd.Command{
-		// Mount commands
-		mountCmd(),
-		umountCmd(),
-
-		// File commands
-		catCmd(),
-		teeCmd(),
-		touchCmd(),
-		mvCmd(),
-
-		// mkdir [path]
-		mkdirCmd(),
-		// cd [path]
-		cdCmd(),
-		walkCmd(),
-
+		// mount <operation> -nprcmfvj [args]...
+		newMountCommand(),
+		// touch <path>
+		newTouchCommand(),
+		// cat [file]...
+		newConcatenateCommand(),
+		// tee [file]...
+		newTeeCommand(),
 		// stat -j <path>
 		newStatCommand(),
 		// etag -s <path>
 		newETagCommand(),
+		// mv <source> <destination>
+		newMoveCommand(),
 		// cp <source> <destination>
 		newCopyCommand(),
 		// help [command]
@@ -35,6 +29,10 @@ func RegisterBuiltins(root *cmd.Command) error {
 		newPrintfCommand(),
 		// echo [text]...
 		newEchoCommand(),
+		// cd <path>
+		newChangeDirectoryCommand(),
+		// mkdir <path>
+		newMakeDirectoryCommand(),
 		// pwd
 		newPrintWorkingDirectoryCommand(),
 		// rm -rf <path>...

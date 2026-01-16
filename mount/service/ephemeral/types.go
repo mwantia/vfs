@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/builder"
 	"github.com/mwantia/vfs/mount/extensions/notification"
 	"github.com/mwantia/vfs/mount/service"
 	"github.com/tidwall/btree"
@@ -26,6 +27,9 @@ type EphemeralMonolithDriver struct {
 	// Object Storage
 	stats map[string]data.FileStat
 	datas map[string][]byte
+
+	// Mount Extension
+	mounts map[string]builder.MountSpecifications
 }
 
 type EphemeralMetadataService struct {

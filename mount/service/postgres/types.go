@@ -34,6 +34,11 @@ type PostgresMetadataService struct {
 	driver *PostgresMonolithDriver
 }
 
+// PostgresMountExtensionService implements MountExtension
+type PostgresMountExtensionService struct {
+	driver *PostgresMonolithDriver
+}
+
 // PostgresBackendConfig holds configuration for the Postgres backend
 type PostgresBackendConfig struct {
 	ConnString string // PostgreSQL connection string

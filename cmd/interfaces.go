@@ -17,6 +17,9 @@ type API interface {
 	// Mount Operations
 	Mount(ctx context.Context, path string, steps ...builder.MountStep) error
 	Unmount(ctx context.Context, path string, force bool) error
+	ListMountSpecs(ctx context.Context) (map[string]builder.MountSpecifications, error)
+	GetMountSpec(ctx context.Context, path string) (builder.MountSpecifications, error)
+	UpdateMountSpec(ctx context.Context, path string, update builder.MountSpecUpdate) (builder.MountSpecifications, error)
 
 	// File I/O Operations
 	OpenFile(ctx context.Context, path string, flags data.AccessMode, opts ...mount.MountStreamerOption) (mount.Streamer, error)

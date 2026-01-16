@@ -86,3 +86,48 @@ func (vfs *virtualFileSystemImpl) Unmount(ctx context.Context, path string, forc
 
 	return root.Unmount(ctx, path, force)
 }
+
+// ListMountSpecs returns all persisted mount specifications.
+func (vfs *virtualFileSystemImpl) ListMountSpecs(ctx context.Context) (map[string]builder.MountSpecifications, error) {
+	ctx, err := validateContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	root, err := vfs.checkRootMount()
+	if err != nil {
+		return nil, errors.ErrRootNotMounted
+	}
+
+	return root.ListMountSpecs(ctx)
+}
+
+// GetMountSpec retrieves the mount specification for the given path.
+func (vfs *virtualFileSystemImpl) GetMountSpec(ctx context.Context, path string) (builder.MountSpecifications, error) {
+	ctx, err := validateContext(ctx)
+	if err != nil {
+		return builder.MountSpecifications{}, err
+	}
+
+	root, err := vfs.checkRootMount()
+	if err != nil {
+		return builder.MountSpecifications{}, errors.ErrRootNotMounted
+	}
+
+	return root.GetMountSpec(ctx, path)
+}
+
+// UpdateMountSpec updates the mount specification for the given path.
+func (vfs *virtualFileSystemImpl) UpdateMountSpec(ctx context.Context, path string, update builder.MountSpecUpdate) (builder.MountSpecifications, error) {
+	ctx, err := validateContext(ctx)
+	if err != nil {
+		return builder.MountSpecifications{}, err
+	}
+
+	root, err := vfs.checkRootMount()
+	if err != nil {
+		return builder.MountSpecifications{}, errors.ErrRootNotMounted
+	}
+
+	return root.UpdateMountSpec(ctx, path, update)
+}

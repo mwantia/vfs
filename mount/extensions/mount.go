@@ -18,19 +18,24 @@ type MountExtension interface {
 	// Service
 	service.Service
 
-	// SaveMount persists a mount specification at the given path.
-	// The spec contains all configuration needed to rebuild the mount.
-	SaveMount(ctx context.Context, path string, spec builder.MountSpecifications) error
+	// PersistMountSpec persists a mount specification at the specified path.
+	// The spec contains all required configuration needed to restore the mount later.
+	PersistMountSpec(ctx context.Context, path string, spec builder.MountSpecifications) error
 
-	// LoadMount retrieves a persisted mount specification for the given path.
-	// Returns error if no mount spec exists at the path.
-	LoadMount(ctx context.Context, path string) (builder.MountSpecifications, error)
+	// RestoreMountSpec retrieves a persistent mount specification for the specificed path.
+	// Returns error if no mount spec exists, or the stored configuration is corrupt.
+	RestoreMountSpec(ctx context.Context, path string) (builder.MountSpecifications, error)
 
-	// DeleteMount removes a persisted mount specification.
+	// UpdateMountSpec updates an existing persistent mount specification.
+	// The update mask specifies which fields to modify.
+	// Returns the full updated spec after applying changes.
+	UpdateMountSpec(ctx context.Context, path string, update builder.MountSpecUpdate) (builder.MountSpecifications, error)
+
+	// DeleteMountSpec removes a persisted mount specification.
 	// This is called when unmounting to clean up persistence.
-	DeleteMount(ctx context.Context, path string) error
+	DeleteMountSpec(ctx context.Context, path string) error
 
-	// ListMounts returns all persisted mount specifications.
+	// ListAllMountSpecs returns all persisted mount specifications.
 	// The Mount struct uses this to rebuild its fstab on initialization.
-	ListMounts(ctx context.Context) (map[string]builder.MountSpecifications, error)
+	ListAllMountSpecs(ctx context.Context) (map[string]builder.MountSpecifications, error)
 }

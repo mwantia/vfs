@@ -3,9 +3,7 @@ package mount
 import (
 	"context"
 	"fmt"
-	"strings"
 
-	traversal "github.com/mwantia/vfs/context"
 	"github.com/mwantia/vfs/errors"
 	"github.com/mwantia/vfs/mount/builder"
 	"github.com/mwantia/vfs/mount/extensions"
@@ -155,18 +153,18 @@ func (m *Mount) Mount(ctx context.Context, path string, steps ...builder.MountSt
 		return fmt.Errorf("failed to build mounter: %v", err)
 	}
 
-	mount, err := BuildMount(ctx, path, mounter)
+	mnt, err := BuildMount(ctx, path, mounter)
 	if err != nil {
 		return fmt.Errorf("failed to build mountpoint: %v", err)
 	}
 
 	// Add to fstab
-	m.fstab[path] = mount
+	m.fstab[path] = mnt
 	// Persist via MountExtension if available
 	if ext, ok := m.Extensions[service.ServiceExtensionMount]; ok {
-		if mountExt, ok := ext.(extensions.MountExtension); ok {
+		if mount, ok := ext.(extensions.MountExtension); ok {
 			spec := mounter.ToMountSpec()
-			if err := mountExt.SaveMount(ctx, path, spec); err != nil {
+			if err := mount.PersistMountSpec(ctx, path, spec); err != nil {
 				// Rollback: remove from fstab
 				delete(m.fstab, path)
 				return fmt.Errorf("failed to persist mount: %v", err)
@@ -188,21 +186,21 @@ func (m *Mount) Unmount(ctx context.Context, path string, force bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	mount, exists := m.fstab[path]
+	mnt, exists := m.fstab[path]
 	if !exists {
 		return errors.ErrPathNotMounted
 	}
 
 	// Check if mount is busy (unless forced)
-	if !force && mount.IsBusy() {
+	if !force && mnt.IsBusy() {
 		return errors.ErrMountBusy
 	}
 	// Check for child mounts in the mount's own fstab
-	if !force && len(mount.fstab) > 0 {
+	if !force && len(mnt.fstab) > 0 {
 		return errors.ErrMountBusy
 	}
 
-	if err := mount.Shutdown(ctx); err != nil {
+	if err := mnt.Shutdown(ctx); err != nil {
 		return err
 	}
 	// Delete persisted mount spec via MountExtension if available
@@ -210,8 +208,8 @@ func (m *Mount) Unmount(ctx context.Context, path string, force bool) error {
 		if mount, ok := ext.(extensions.MountExtension); ok {
 			// Best effort deletion - mount is already unmounted
 			// so we don't want to fail the operation if persistence deletion fails
-			if err := mount.DeleteMount(ctx, path); err != nil {
-				return err
+			if err := mount.DeleteMountSpec(ctx, path); err != nil {
+				return fmt.Errorf("failed to delete persistent mount spec: %v", err)
 			}
 			// Remove from fstab
 			delete(m.fstab, path)
@@ -230,7 +228,7 @@ func (m *Mount) Restore(ctx context.Context) error {
 	if ext, ok := m.Extensions[service.ServiceExtensionMount]; ok {
 		if mount, ok := ext.(extensions.MountExtension); ok {
 			// List all persisted mount specifications
-			specs, err := mount.ListMounts(ctx)
+			specs, err := mount.ListAllMountSpecs(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to list persisted mounts: %v", err)
 			}
@@ -267,45 +265,78 @@ func (m *Mount) restoreMountPoint(ctx context.Context, path string, steps ...bui
 		return fmt.Errorf("failed to build mounter for '%s': %v", path, err)
 	}
 
-	mount, err := BuildMount(ctx, path, mounter)
+	mnt, err := BuildMount(ctx, path, mounter)
 	if err != nil {
 		return fmt.Errorf("failed to build mountpath for '%s': %v", path, err)
 	}
 
-	m.fstab[path] = mount
+	m.fstab[path] = mnt
 	return nil
 }
 
-// resolve
-func (m *Mount) resolve(traversal traversal.TraversalContext) (bool, MountPoint, traversal.TraversalContext) {
-	// Ignore empty or direct relative paths,
-	// these are handled locally
-	relative := traversal.RelativePath()
-	if relative != "" && relative != "/" {
-		m.mu.RLock()
-		defer m.mu.RUnlock()
+// ListMountSpecs returns all persisted mount specifications.
+// Returns an error if no MountExtension is configured.
+func (m *Mount) ListMountSpecs(ctx context.Context) (map[string]builder.MountSpecifications, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-		var bestMatch MountPoint
-		var bestPrefix string
-
-		for path, mount := range m.fstab {
-			// Normalize paths for comparison
-			normalizedPath := strings.Trim(path, "/")
-			normalizedRelative := strings.Trim(relative, "/")
-			// Check if mountpath is a matching prefix
-			if normalizedRelative == normalizedPath || strings.HasPrefix(normalizedRelative, normalizedPath+"/") {
-				// Keep the longest match
-				if len(normalizedPath) > len(bestPrefix) {
-					bestMatch = mount
-					bestPrefix = normalizedPath
-				}
-			}
-		}
-		// Found a matching submount to traverse to
-		if bestPrefix != "" {
-			return true, bestMatch, traversal.Traverse(bestPrefix)
-		}
+	ext, ok := m.Extensions[service.ServiceExtensionMount]
+	if !ok {
+		return nil, fmt.Errorf("no mount extension configured")
 	}
-	// No submount found, handle locally
-	return false, m, traversal
+
+	mountExt, ok := ext.(extensions.MountExtension)
+	if !ok {
+		return nil, fmt.Errorf("invalid mount extension type")
+	}
+
+	return mountExt.ListAllMountSpecs(ctx)
+}
+
+// GetMountSpec retrieves the mount specification for the given path.
+// Returns an error if the path is not mounted or no MountExtension is configured.
+func (m *Mount) GetMountSpec(ctx context.Context, path string) (builder.MountSpecifications, error) {
+	// Check if path resolves to a child mount
+	if mount, mountpoint := m.resolveMountPoint(path); path != mountpoint {
+		return mount.GetMountSpec(ctx, mountpoint)
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ext, ok := m.Extensions[service.ServiceExtensionMount]
+	if !ok {
+		return builder.MountSpecifications{}, fmt.Errorf("no mount extension configured")
+	}
+
+	mountExt, ok := ext.(extensions.MountExtension)
+	if !ok {
+		return builder.MountSpecifications{}, fmt.Errorf("invalid mount extension type")
+	}
+
+	return mountExt.RestoreMountSpec(ctx, path)
+}
+
+// UpdateMountSpec updates the mount specification for the given path.
+// Returns the updated specification or an error if the update fails.
+func (m *Mount) UpdateMountSpec(ctx context.Context, path string, update builder.MountSpecUpdate) (builder.MountSpecifications, error) {
+	// Check if path resolves to a child mount
+	if mount, mountpoint := m.resolveMountPoint(path); path != mountpoint {
+		return mount.UpdateMountSpec(ctx, mountpoint, update)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ext, ok := m.Extensions[service.ServiceExtensionMount]
+	if !ok {
+		return builder.MountSpecifications{}, fmt.Errorf("no mount extension configured")
+	}
+
+	mountExt, ok := ext.(extensions.MountExtension)
+	if !ok {
+		return builder.MountSpecifications{}, fmt.Errorf("invalid mount extension type")
+	}
+
+	return mountExt.UpdateMountSpec(ctx, path, update)
 }

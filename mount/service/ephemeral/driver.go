@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/mwantia/vfs/data"
+	"github.com/mwantia/vfs/mount/builder"
 	"github.com/mwantia/vfs/mount/extensions/notification"
 	"github.com/mwantia/vfs/mount/service"
 	"github.com/tidwall/btree"
@@ -21,6 +22,8 @@ func NewEphemeralMonolithDriver(uri *service.Uri) *EphemeralMonolithDriver {
 
 		stats: make(map[string]data.FileStat),
 		datas: make(map[string][]byte),
+
+		mounts: make(map[string]builder.MountSpecifications),
 	}
 }
 
@@ -105,6 +108,10 @@ func (d *EphemeralMonolithDriver) CloseDriver(ctx context.Context) error {
 	// Clear stored data
 	for k := range d.datas {
 		delete(d.datas, k)
+	}
+	// Clear stored mounts
+	for k := range d.mounts {
+		delete(d.mounts, k)
 	}
 
 	return nil

@@ -31,8 +31,20 @@ type MountPoint interface {
 	// Returns an error if the path is not mounted or has child mounts.
 	Unmount(ctx context.Context, path string, force bool) error
 
-	// Restore
+	// Restore restores persisted mount specifications from the MountExtension.
 	Restore(ctx context.Context) error
+
+	// ListMountSpecs returns all persisted mount specifications.
+	// Returns an error if no MountExtension is configured.
+	ListMountSpecs(ctx context.Context) (map[string]builder.MountSpecifications, error)
+
+	// GetMountSpec retrieves the mount specification for the given path.
+	// Returns an error if the path is not mounted or no MountExtension is configured.
+	GetMountSpec(ctx context.Context, path string) (builder.MountSpecifications, error)
+
+	// UpdateMountSpec updates the mount specification for the given path.
+	// Returns the updated specification or an error if the update fails.
+	UpdateMountSpec(ctx context.Context, path string, update builder.MountSpecUpdate) (builder.MountSpecifications, error)
 
 	// OpenFile opens a file with the specified access mode flags and returns a file handle.
 	// The returned VirtualFile must be closed by the caller. Use flags to control access.

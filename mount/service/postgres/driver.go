@@ -45,6 +45,12 @@ const postgresSchema = `
 		last_accessed BIGINT NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_vfs_data_ref_count ON vfs_data(ref_count);
+
+	-- Mount specifications storage (fstab persistence)
+	CREATE TABLE IF NOT EXISTS vfs_mounts (
+		path TEXT PRIMARY KEY,
+		spec JSONB NOT NULL
+	);
 `
 
 // NewPostgresMonolithDriver creates a new Postgres monolith driver
@@ -93,6 +99,9 @@ func (d *PostgresMonolithDriver) IsBusy() bool {
 func (*PostgresMonolithDriver) GetCapabilities() *service.DriverCapabilities {
 	return &service.DriverCapabilities{
 		Type: DriverType,
+		Extensions: []service.ServiceExtension{
+			service.ServiceExtensionMount,
+		},
 		ObjectStorage: service.ObjectStorageCapabilities{
 			Operations: []service.ObjectStorageOperation{
 				service.ObjectStorageOperationCreate,
@@ -186,8 +195,13 @@ func (d *PostgresMonolithDriver) GetMetadataService() service.MetadataService {
 	}
 }
 
-// GetExtensionService returns the extension service (none supported for Postgres currently)
+// GetExtensionService returns the extension service for the given extension type
 func (d *PostgresMonolithDriver) GetExtensionService(ext service.ServiceExtension) service.Service {
+	if ext == service.ServiceExtensionMount {
+		return &PostgresMountExtensionService{
+			driver: d,
+		}
+	}
 	return nil
 }
 
